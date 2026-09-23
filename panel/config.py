@@ -56,3 +56,14 @@ GITHUB_CACHE_TTL = int(os.environ.get("TESL_PANEL_GITHUB_CACHE_TTL", "300"))
 INITIAL_PROJECTS = set(
     p.strip() for p in os.environ.get("TESL_PANEL_PROJECTS", "TESVAE").split(",") if p.strip()
 )
+
+# Публичный адрес панели, каким его должен видеть клиент (TESL-Manager) —
+# используется ТОЛЬКО для генерации "кода настройки" на /admin/settings
+# (см. app.py::_generate_setup_code). Если не задан явно, берётся из
+# request.url_root на лету — этого достаточно в обычном случае (админ и
+# так заходит через реальный публичный домен за Cloudflare, тот же URL
+# клиенту и нужен). Задавать явно стоит только если запрос до Flask
+# доходит через прокси, искажающий Host/схему так, что url_root получается
+# неверным (например, внутренний HTTP за терминацией TLS без
+# X-Forwarded-Proto).
+PUBLIC_BASE_URL = os.environ.get("TESL_PANEL_PUBLIC_URL", "").rstrip("/")

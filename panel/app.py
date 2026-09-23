@@ -15,6 +15,8 @@ TESL-Panel — тонкий веб-сервис с двумя ролями:
      (тот же принцип, что и у read-only nginx-плана в TESL-Manager: чтение
      депо не секрет, запись — да).
 """
+import base64
+import json
 from functools import wraps
 
 from flask import (
@@ -99,6 +101,30 @@ def create_app() -> Flask:
                 error=f"Недопустимое имя: {name!r} (только буквы/цифры/_/-, до 64 симв.)",
             ), 400
         return redirect(url_for("admin_page"))
+
+    # ── Admin: "код настройки" для TESL-Manager (Настройки → одна строка,
+    #    вставляется в клиент вместо URL+токена по отдельности) ────────────────
+
+    def _generate_setup_code() -> str:
+        # base64(JSON) — не секретность ради самого кодирования (тот же
+        # UPLOAD_TOKEN и так виден в открытом виде на этой же странице),
+        # а чтобы в одну строку без переносов/пробелов помещалось сразу
+        # несколько полей (url + token, при необходимости — другие в
+        # будущем) и клиент мог надёжно распарсить её одним action'ом
+        # "Подключить по коду" вместо трёх отдельных полей ввода.
+        base_url = config.PUBLIC_BASE_URL or request.url_root.rstrip("/")
+        payload = {"v": 1, "base_url": base_url, "token": config.UPLOAD_TOKEN}
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return base64.b64encode(raw).decode("ascii")
+
+    @app.get("/admin/settings")
+    @_admin_required
+    def admin_settings():
+        return render_template(
+            "settings.html",
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+        )
 
     @app.get("/admin/project/<name>")
     @_admin_required
