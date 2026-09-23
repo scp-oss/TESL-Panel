@@ -233,3 +233,6 @@ echo " SSL/TLS mode = Full (strict) — иначе TLS будет невалид
 echo
 echo "Upload-токен для TESL-Manager (введи в его настройках публикации):"
 echo "  $UPLOAD_TOKEN"
+echo
+echo "Вход в /admin одной ссылкой (см. /admin/login?token=... в CLAUDE.md):"
+echo "  https://$DOMAIN/admin/login?token=$UPLOAD_TOKEN"
