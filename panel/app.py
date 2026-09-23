@@ -74,6 +74,22 @@ def create_app() -> Flask:
 
     @app.get("/admin/login")
     def admin_login():
+        # Вход одной ссылкой — /admin/login?token=<UPLOAD_TOKEN> —
+        # тот же токен, что и у формы ниже/Bearer у /api/*, просто как
+        # query-параметр вместо POST-формы, чтобы ссылку можно было
+        # сохранить/переслать и войти одним кликом. Не более "открыто",
+        # чем остальной проект уже обращается с этим токеном (тот же
+        # токен явным текстом в коде настройки на /admin/settings) —
+        # если токен когда-нибудь станет более чувствительным, эту
+        # ссылку тоже нужно будет пересмотреть.
+        token = request.args.get("token", "")
+        if token:
+            if not _token_valid(token):
+                return render_template("login.html", error="Неверный токен"), 401
+            session["admin"] = True
+            session.permanent = True
+            next_path = request.args.get("next") or url_for("admin_page")
+            return redirect(next_path)
         return render_template("login.html", error=None)
 
     @app.post("/admin/login")
