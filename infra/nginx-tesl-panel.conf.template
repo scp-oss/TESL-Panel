@@ -1,11 +1,24 @@
+# Плейсхолдеры (__X__) заполняются infra/deploy.sh — не редактировать руками,
+# не коммитить с реальными значениями (домен/пути — ДСП, см. CLAUDE.md).
+#
+# TLS — Cloudflare Origin Certificate, НЕ Let's Encrypt/certbot: порты
+# 80/443 на этом сервере уже заняты другими проектами под certbot
+# (nethunter.sytes.net и т.д.), трогать их нельзя — тот же принцип, что и
+# у read-only nginx-плана в TESL-Manager (nginx-depot-read.conf.template).
+# Публичный TLS для пользователя терминируется на Cloudflare (домен
+# должен быть на "Proxied", оранжевое облако); сюда нужен сертификат,
+# которому доверяет только Cloudflare — SSL/TLS -> Origin Server ->
+# Create Certificate в дэшборде, 15 лет, бесплатно. SSL/TLS mode на
+# Cloudflare — "Full (strict)".
+
 server {
-    listen 80;
-    listen [::]:80;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
     server_name __DOMAIN__;
 
-    # certbot --nginx переключит этот server-блок на 443 и допишет ssl_*
-    # директивы сам, после первого успешного выпуска сертификата — этот
-    # файл до certbot нарочно HTTP-only.
+    ssl_certificate     __ORIGIN_CERT__;
+    ssl_certificate_key __ORIGIN_KEY__;
 
     client_max_body_size 64m;   # с запасом сверх максимального размера чанка (4MB, config.py)
 
@@ -16,4 +29,14 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+}
+
+# HTTP -> HTTPS редирект — на случай обращения мимо Cloudflare (Full
+# (strict) требует, чтобы origin сам поддерживал TLS, порт 80 не должен
+# отвечать голым HTTP).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+    return 301 https://$host$request_uri;
 }

@@ -11,6 +11,19 @@
 # прямо в него, копировать файлы никуда не нужно; `git pull` в этой же
 # папке + повторный запуск deploy.sh — штатный способ обновиться.
 #
+# TLS — Cloudflare Origin Certificate, НЕ certbot/Let's Encrypt: порты
+# 80/443 на этом сервере уже заняты другими проектами под certbot,
+# трогать их конфиги нельзя (тот же принцип, что у setup_depot_nginx.sh
+# в TESL-Manager). ПЕРЕД запуском:
+#   1. Cloudflare -> SSL/TLS -> Origin Server -> Create Certificate
+#      (15 лет, бесплатно) для домена панели.
+#   2. Сохрани на сервере:
+#        <PROJECT_DIR>/ssl/origin.pem   (сертификат)
+#        <PROJECT_DIR>/ssl/origin.key   (приватный ключ)
+#      (пути можно переопределить --cert/--key)
+#   3. В Cloudflare: A/AAAA-запись на этот сервер, статус "Proxied"
+#      (оранжевое облако), SSL/TLS mode = "Full (strict)".
+#
 # Использование (первый запуск — генерирует upload-токен сам и печатает
 # его в конце, СОХРАНИ его, он нужен для настройки TESL-Manager):
 #   sudo ./infra/deploy.sh --domain panel.example.com \
@@ -21,13 +34,6 @@
 # перегенерируется):
 #   git pull && sudo ./infra/deploy.sh --domain panel.example.com \
 #       --storage-root /mnt/1tb-1 --projects TESVAE
-#
-# После первого запуска ОТДЕЛЬНО, вручную:
-#   sudo certbot --nginx -d panel.example.com
-# (сам deploy.sh не трогает TLS/certbot — тот же принцип, что и у
-# setup_depot_nginx.sh: не мешать существующим сертификатам/сервисам на
-# этой же машине; certbot --nginx сам допишет ssl_* в конфиг, ничего не
-# ломая на соседних server-блоках).
 
 set -euo pipefail
 
@@ -38,6 +44,8 @@ PORT="8090"
 SERVICE_USER="tesl-panel"
 UPLOAD_TOKEN=""
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CERT_PATH=""
+KEY_PATH=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -47,9 +55,17 @@ while [[ $# -gt 0 ]]; do
         --port)          PORT="$2"; shift 2 ;;
         --service-user)  SERVICE_USER="$2"; shift 2 ;;
         --upload-token)  UPLOAD_TOKEN="$2"; shift 2 ;;
+        --cert)          CERT_PATH="$2"; shift 2 ;;
+        --key)           KEY_PATH="$2"; shift 2 ;;
         *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;
     esac
 done
+
+# Дефолты, зависящие от PROJECT_DIR — считаются ПОСЛЕ парсинга аргументов
+# (тот же принцип, что и в setup_depot_nginx.sh), только если --cert/--key
+# не заданы явно по отдельности.
+: "${CERT_PATH:=$PROJECT_DIR/ssl/origin.pem}"
+: "${KEY_PATH:=$PROJECT_DIR/ssl/origin.key}"
 
 if [[ $EUID -ne 0 ]]; then
     echo "Запускать через sudo/от root — нужно писать в /etc/systemd, /etc/nginx." >&2
@@ -57,6 +73,14 @@ if [[ $EUID -ne 0 ]]; then
 fi
 if [[ -z "$DOMAIN" || -z "$STORAGE_ROOT" ]]; then
     echo "Нужны минимум --domain и --storage-root. См. докстринг файла за примером." >&2
+    exit 1
+fi
+if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ]]; then
+    echo "❌ Не найден Cloudflare Origin Certificate:" >&2
+    echo "     $CERT_PATH" >&2
+    echo "     $KEY_PATH" >&2
+    echo "   Получи его в Cloudflare (SSL/TLS -> Origin Server -> Create Certificate)" >&2
+    echo "   и положи по этим путям (или передай --cert/--key), см. докстринг файла." >&2
     exit 1
 fi
 
@@ -136,6 +160,8 @@ NGINX_CONF="$PROJECT_DIR/nginx/$DOMAIN.conf"
 sed \
     -e "s#__DOMAIN__#$DOMAIN#g" \
     -e "s#__PORT__#$PORT#g" \
+    -e "s#__ORIGIN_CERT__#$CERT_PATH#g" \
+    -e "s#__ORIGIN_KEY__#$KEY_PATH#g" \
     "$PROJECT_DIR/infra/nginx-tesl-panel.conf.template" > "$NGINX_CONF"
 
 ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/$DOMAIN.conf"
@@ -144,10 +170,9 @@ systemctl reload nginx
 
 echo
 echo "== Готово =="
-echo "HTTP уже работает: curl -I http://$DOMAIN/health"
-echo
-echo "Дальше вручную (это deploy.sh НЕ делает сам — TLS отдельный шаг):"
-echo "  sudo certbot --nginx -d $DOMAIN"
+echo "Проверить: curl -I https://$DOMAIN/health"
+echo "(убедись, что в Cloudflare для этого домена включено Proxied +"
+echo " SSL/TLS mode = Full (strict) — иначе TLS будет невалиден на edge)"
 echo
 echo "Upload-токен для TESL-Manager (введи в его настройках публикации):"
 echo "  $UPLOAD_TOKEN"

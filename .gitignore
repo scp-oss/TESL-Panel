@@ -6,3 +6,5 @@ data/
 *.log
 infra/panel.env
 panel.env
+ssl/
+nginx/

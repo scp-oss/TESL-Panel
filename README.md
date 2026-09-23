@@ -33,16 +33,21 @@ TESL_PANEL_STORAGE_ROOT=./data TESL_PANEL_UPLOAD_TOKEN=devtoken TESL_PANEL_PROJE
 
 ## Деплой на сервер
 
-См. `infra/deploy.sh` (запускать на самом сервере, root по SSH, скрипт
-идемпотентен):
+TLS — Cloudflare Origin Certificate, НЕ certbot (порты 80/443 на сервере
+уже заняты другими проектами под certbot). Перед запуском получи
+сертификат в Cloudflare (SSL/TLS -> Origin Server -> Create Certificate)
+и положи его на сервер как `<repo>/ssl/origin.pem`/`origin.key`.
 
 ```bash
 git clone https://github.com/scp-oss/TESL-Panel.git
 cd TESL-Panel
 sudo ./infra/deploy.sh --domain panel.example.com \
     --storage-root /mnt/1tb-1 --projects TESVAE
-sudo certbot --nginx -d panel.example.com
 ```
+
+В Cloudflare для этого домена: A/AAAA-запись на сервер, "Proxied"
+(оранжевое облако), SSL/TLS mode = "Full (strict)". Подробности и
+дефолтные пути сертификата — см. докстринг `infra/deploy.sh`.
 
 Скрипт сам генерирует upload-токен при первом запуске и печатает его в
 конце — этот токен нужен для настройки публикации в TESL-Manager
