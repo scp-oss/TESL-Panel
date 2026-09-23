@@ -66,4 +66,23 @@ INITIAL_PROJECTS = set(
 # доходит через прокси, искажающий Host/схему так, что url_root получается
 # неверным (например, внутренний HTTP за терминацией TLS без
 # X-Forwarded-Proto).
-PUBLIC_BASE_URL = os.environ.get("TESL_PANEL_PUBLIC_URL", "").rstrip("/")
+#
+# TESL_PANEL_DOMAIN — прямой запрос пользователя 2026-09-23: этот env-var
+# уже пишется в panel.env (deploy.sh, из --domain) и до этой правки
+# приложением НЕ читался вообще — использовался только внутри самого
+# deploy.sh для генерации nginx-конфига. Теперь это запасной источник для
+# PUBLIC_BASE_URL (просто домен, без схемы — https:// добавляем сами,
+# т.к. весь деплой этого проекта всегда за Cloudflare Full (strict) +
+# nginx, HTTP как публичная схема здесь никогда не используется), на
+# случай если у request.url_root/TESL_PANEL_PUBLIC_URL когда-то будет
+# то же искажение прокси, что описано выше. TESL_PANEL_PUBLIC_URL, если
+# задан явно, имеет приоритет — он специально существует для случаев,
+# когда одного домена (без пути/нестандартного порта) недостаточно.
+_PUBLIC_URL_ENV = os.environ.get("TESL_PANEL_PUBLIC_URL", "").rstrip("/")
+_DOMAIN_ENV = os.environ.get("TESL_PANEL_DOMAIN", "").strip()
+if _PUBLIC_URL_ENV:
+    PUBLIC_BASE_URL = _PUBLIC_URL_ENV
+elif _DOMAIN_ENV:
+    PUBLIC_BASE_URL = f"https://{_DOMAIN_ENV}"
+else:
+    PUBLIC_BASE_URL = ""
