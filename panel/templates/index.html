@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL — скачать</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --card: #171a21;
+      --card-border: #262b36;
+      --text: #e7e9ee;
+      --muted: #9aa3b2;
+      --accent: #5b8def;
+      --accent-hover: #4a78d6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 16px;
+    }
+    h1 {
+      font-size: 1.6rem;
+      margin: 0 0 8px;
+    }
+    p.lead {
+      color: var(--muted);
+      margin: 0 0 32px;
+      text-align: center;
+      max-width: 520px;
+    }
+    .cards {
+      display: grid;
+      gap: 16px;
+      width: 100%;
+      max-width: 480px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card h2 {
+      margin: 0 0 4px;
+      font-size: 1.1rem;
+    }
+    .card .meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+      margin-bottom: 16px;
+    }
+    .btn {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: background 0.15s ease;
+    }
+    .btn:hover { background: var(--accent-hover); }
+    .btn.disabled {
+      background: #2a2f3a;
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .unavailable {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    footer {
+      margin-top: 48px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>TESL</h1>
+  <p class="lead">Лаунчер и менеджер сборки Skyrim SE — актуальные версии всегда здесь.</p>
+
+  <div class="cards">
+    {% for key, title in titles.items() %}
+      {% set r = releases.get(key) %}
+      <div class="card">
+        <h2>{{ title }}</h2>
+        {% if r %}
+          <div class="meta">{{ r.tag }} · {{ (r.size_bytes / 1024 / 1024) | round(1) }} МБ</div>
+          <a class="btn" href="{{ r.download_url }}">Скачать {{ r.asset_name }}</a>
+        {% else %}
+          <div class="meta unavailable">Релиз временно недоступен</div>
+          <span class="btn disabled">Скачать</span>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+
+  <footer>Сборка распространяется отдельно, через лаунчер.</footer>
+</body>
+</html>

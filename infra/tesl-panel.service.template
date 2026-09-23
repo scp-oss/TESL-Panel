@@ -1,0 +1,20 @@
+[Unit]
+Description=TESL-Panel (download page + build-publish API)
+After=network.target
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__PROJECT_DIR__/panel.env
+ExecStart=__PROJECT_DIR__/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:__PORT__ --timeout 300 wsgi:app
+Restart=on-failure
+RestartSec=5
+
+# Депо может быть крупным (десятки-сотни ГБ чанков) — сервис пишет только
+# внутрь STORAGE_ROOT (задан в panel.env) и своей папки WorkingDirectory,
+# ничего больше трогать не должен.
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
