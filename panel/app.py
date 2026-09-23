@@ -15,9 +15,9 @@ TESL-Panel — тонкий веб-сервис с двумя ролями:
      (тот же принцип, что и у read-only nginx-плана в TESL-Manager: чтение
      депо не секрет, запись — да).
 """
-from flask import Flask, Response, abort, jsonify, render_template, request
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, url_for
 
-from . import config, github_releases, storage
+from . import config, github_releases, projects, storage
 from .storage import UnsafePathError
 
 
@@ -39,10 +39,36 @@ def create_app() -> Flask:
     def health():
         return jsonify({"status": "ok"})
 
+    # ── Admin: список сборок + добавление новой (без передеплоя, см.
+    #    projects.py) ──────────────────────────────────────────────────────────
+
+    def _token_valid(token: str) -> bool:
+        return bool(config.UPLOAD_TOKEN) and token == config.UPLOAD_TOKEN
+
+    @app.get("/admin")
+    def admin_page():
+        return render_template("admin.html", projects=projects.list_projects(), error=None)
+
+    @app.post("/admin/add-project")
+    def admin_add_project():
+        token = request.form.get("token", "")
+        name  = request.form.get("project", "").strip()
+        if not _token_valid(token):
+            return render_template(
+                "admin.html", projects=projects.list_projects(),
+                error="Неверный токен",
+            ), 401
+        if not projects.add_project(name):
+            return render_template(
+                "admin.html", projects=projects.list_projects(),
+                error=f"Недопустимое имя: {name!r} (только буквы/цифры/_/-, до 64 симв.)",
+            ), 400
+        return redirect(url_for("admin_page"))
+
     # ── Depot API ────────────────────────────────────────────────────────────
 
     def _check_project(project: str):
-        if project not in config.ALLOWED_PROJECTS:
+        if not projects.is_allowed(project):
             abort(404, description=f"неизвестный project: {project}")
 
     def _require_upload_token():
@@ -51,7 +77,7 @@ def create_app() -> Flask:
             # целиком, а не тихо разрешена без проверки.
             abort(503, description="upload token не сконфигурирован на сервере")
         auth = request.headers.get("Authorization", "")
-        if not auth.startswith("Bearer ") or auth[len("Bearer "):] != config.UPLOAD_TOKEN:
+        if not auth.startswith("Bearer ") or not _token_valid(auth[len("Bearer "):]):
             abort(401, description="неверный или отсутствующий Bearer-токен")
 
     @app.get("/api/depot/<project>/test")

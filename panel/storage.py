@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import List, Optional
 
-from . import config
+from . import config, projects
 
 
 class UnsafePathError(ValueError):
@@ -20,7 +20,7 @@ class UnsafePathError(ValueError):
 
 
 def _project_root(project: str) -> Path:
-    if project not in config.ALLOWED_PROJECTS:
+    if not projects.is_allowed(project):
         raise ValueError(f"неизвестный project: {project!r}")
     return Path(config.STORAGE_ROOT).resolve() / project
 

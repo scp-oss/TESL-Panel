@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — admin</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115;
+      --card: #171a21;
+      --card-border: #262b36;
+      --text: #e7e9ee;
+      --muted: #9aa3b2;
+      --accent: #5b8def;
+      --accent-hover: #4a78d6;
+      --danger: #e5555f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 16px;
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 24px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 420px;
+      margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--muted); }
+    ul { margin: 0; padding-left: 20px; }
+    li { margin-bottom: 4px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+    input {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--card-border);
+      background: #0f1115;
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+    button {
+      margin-top: 16px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: var(--accent-hover); }
+    .error {
+      color: var(--danger);
+      font-size: 0.85rem;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <h1>TESL-Panel — сборки</h1>
+
+  <div class="card">
+    <h2>Текущие project'ы</h2>
+    {% if projects %}
+      <ul>
+        {% for p in projects %}<li><code>{{ p }}</code></li>{% endfor %}
+      </ul>
+    {% else %}
+      <p style="color: var(--muted);">Пока ни одной.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Добавить новую сборку</h2>
+    <form method="post" action="/admin/add-project">
+      <label for="project">Имя сборки (буквы/цифры/_/-, до 64 симв.)</label>
+      <input type="text" id="project" name="project" required pattern="[A-Za-z0-9_-]{1,64}">
+      <label for="token">Upload-токен</label>
+      <input type="password" id="token" name="token" required>
+      <button type="submit">Добавить</button>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    </form>
+  </div>
+</body>
+</html>
