@@ -73,6 +73,31 @@ z0r-panel, TESL, TESL-Manager). `infra/deploy.sh` только готовитс�
 - `GET /api/depot/<project>/test` — проверка достижимости + (неявно,
   через отдельный `PUT`-запрос до этого) валидности токена.
 
+## Projects/Files API (JSON, для десктоп-GUI TESL-Manager, 2026-09-23)
+
+Добавлено под конкретную нужду TESL-Manager'а: `depot_tab.py` там
+получил серверный выбор проекта вместо ручного ввода строки, плюс
+отдельная вкладка "🗂️ Файлы на депо" (десктоп-эквивалент здешнего
+`/admin/project/<name>/files`, но без cookie-сессии) — см. TESL-Manager's
+CLAUDE.md за подробности GUI-стороны.
+
+- `GET /api/projects` — публичное чтение, список имён (`projects.
+  list_projects()`), токен не нужен (тот же принцип, что у GET/HEAD
+  `depot_object`).
+- `POST /api/projects` — Bearer, тело `{"name": "..."}` (JSON) или
+  form-поле `name`; `projects.add_project()` — та же валидация
+  (`[A-Za-z0-9_-]{1,64}`), что и `/admin/add-project`, 400 при
+  недопустимом имени, 201 при успехе (идемпотентно — уже существующее
+  имя тоже 201).
+- `GET /api/depot/<project>/files` — Bearer (не публичный — тот же
+  уровень доверия, что у `/admin/.../files`, только без сессии),
+  JSON `{"files": [{"path": ..., "size": ...}, ...]}` —
+  `storage.list_files()` без изменений, просто новый JSON-фасад.
+- `DELETE /api/depot/<project>/<rel_path>` — Bearer, тот же URL, что
+  уже существующие GET/HEAD/PUT на `depot_object` (не отдельный роут,
+  просто новый метод) — `storage.delete_file()`, идемпотентно
+  (`{"existed": false}`, не ошибка, при повторном вызове).
+
 `project` — allowlist (`config.ALLOWED_PROJECTS`, `TESL_PANEL_PROJECTS`
 через запятую), не принимается как произвольная строка — двойная
 защита от path traversal: (1) на уровне имени проекта здесь, (2) на

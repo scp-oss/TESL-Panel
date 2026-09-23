@@ -211,6 +211,40 @@ def create_app() -> Flask:
             abort(400, description="некорректный путь")
         return redirect(url_for("admin_files", name=name))
 
+    # ── Projects API (JSON, Bearer — для десктоп-GUI TESL-Manager, см. его
+    #    depot_tab.py: серверный список проектов вместо ручного ввода
+    #    имени + возможность создать новый прямо из GUI, тем же токеном,
+    #    что уже используется для публикации чанков) ──────────────────────────
+
+    @app.get("/api/projects")
+    def api_list_projects():
+        # Публичное чтение — список имён проектов не секрет (тот же
+        # принцип, что у GET/HEAD depot_object ниже).
+        return jsonify({"projects": projects.list_projects()})
+
+    @app.post("/api/projects")
+    def api_add_project():
+        _require_upload_token()
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or request.form.get("name") or "").strip()
+        if not projects.add_project(name):
+            abort(400, description=f"недопустимое имя проекта: {name!r} (только буквы/цифры/_/-, до 64 симв.)")
+        return jsonify({"status": "ok", "project": name}), 201
+
+    # ── Файлы проекта — JSON-листинг для десктоп-GUI (Bearer, тот же
+    #    уровень доверия, что у /admin/project/<name>/files, только без
+    #    cookie-сессии — сам просмотр/правка/загрузка байт файла уже
+    #    покрыты обычным GET/PUT/DELETE на depot_object ниже). ────────────────
+
+    @app.get("/api/depot/<project>/files")
+    def api_depot_files(project):
+        _check_project(project)
+        _require_upload_token()
+        try:
+            return jsonify({"files": storage.list_files(project)})
+        except UnsafePathError:
+            abort(400)
+
     # ── Depot API ────────────────────────────────────────────────────────────
 
     def _check_project(project: str):
@@ -239,10 +273,20 @@ def create_app() -> Flask:
         except UnsafePathError:
             abort(400)
 
-    @app.route("/api/depot/<project>/<path:rel_path>", methods=["GET", "HEAD", "PUT"])
+    @app.route("/api/depot/<project>/<path:rel_path>", methods=["GET", "HEAD", "PUT", "DELETE"])
     def depot_object(project, rel_path):
         _check_project(project)
         try:
+            if request.method == "DELETE":
+                # Тот же Bearer-токен, что и PUT — используется десктоп-GUI
+                # (см. TESL-Manager/depot_sync_manager/server_files_panel_tab.py)
+                # для удаления уже опубликованного файла из отдельной
+                # вкладки "Файлы на сервере", тем же смыслом, что и
+                # /admin/project/<name>/files/delete, только без cookie-сессии.
+                _require_upload_token()
+                existed = storage.delete_file(project, rel_path)
+                return jsonify({"status": "ok", "existed": existed})
+
             if request.method == "PUT":
                 _require_upload_token()
                 data = request.get_data(cache=False)
