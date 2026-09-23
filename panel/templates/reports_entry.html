@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — {{ username }} / {{ timestamp }}</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def;
+      --danger: #e5555f; --danger-hover: #c8434c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    h1 { font-size: 1.15rem; margin: 0 0 20px; width: 100%; max-width: 520px; word-break: break-all; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 20px; width: 100%; max-width: 520px; margin-bottom: 14px; }
+    ul { margin: 0; padding-left: 0; list-style: none; }
+    li { display: flex; justify-content: space-between; padding: 8px 0;
+      border-bottom: 1px solid var(--card-border); }
+    li:last-child { border-bottom: none; }
+    .muted { color: var(--muted); }
+    .danger-btn { background: var(--danger); color: #fff; border: none; padding: 9px 16px;
+      border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .danger-btn:hover { background: var(--danger-hover); }
+  </style>
+</head>
+<body>
+  <h1>
+    <a href="/admin/reports/{{ report_type }}/{{ username }}">&larr; {{ title }} / {{ username }}</a>
+    / {{ timestamp }}
+  </h1>
+
+  <div class="card">
+    {% if files %}
+      <ul>
+        {% for f in files %}
+          <li>
+            <a href="/admin/reports/{{ report_type }}/{{ username }}/{{ timestamp }}/{{ f.name }}">{{ f.name }}</a>
+            <span class="muted">{{ (f.size / 1024) | round(1) }} КБ</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Файлов нет.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <form method="post" action="/admin/reports/{{ report_type }}/{{ username }}/{{ timestamp }}/delete"
+          onsubmit="return confirm('Удалить этот отчёт целиком?');">
+      <button class="danger-btn" type="submit">Удалить отчёт</button>
+    </form>
+  </div>
+</body>
+</html>

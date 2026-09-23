@@ -31,8 +31,9 @@ from flask import (
     session, url_for,
 )
 
-from . import builds_db, config, github_releases, self_update, storage
+from . import builds_db, config, github_releases, reports_storage, self_update, storage, system_stats
 from .storage import UnsafePathError
+from .reports_storage import UnsafePathError as ReportsUnsafePathError
 
 
 def create_app() -> Flask:
@@ -420,6 +421,138 @@ def create_app() -> Flask:
             )
         except UnsafePathError:
             abort(400, description="некорректный путь")
+
+    # ── Отчёты с клиентов (лаунчеров) ────────────────────────────────────────
+    # Прямой запрос пользователя: раздел "Отчёты", два вида — крэш-репорты
+    # и логи отладки (см. reports_storage.py докстринг — уже существующие
+    # на стороне TESL-лаунчера кейсы, сейчас идут на WebDAV напрямую;
+    # лаунчер НЕ трогается этим заходом, эта панель — только готовая
+    # принять их инфраструктура на будущее, плюс сама админ-страница
+    # просмотра уже накопленного).
+
+    @app.get("/admin/reports")
+    @_admin_required
+    def admin_reports():
+        summary = [
+            {"type": t, "title": title, "count": reports_storage.count_entries(t)}
+            for t, title in reports_storage.REPORT_TYPES.items()
+        ]
+        return render_template("reports.html", summary=summary)
+
+    @app.get("/admin/reports/<report_type>")
+    @_admin_required
+    def admin_reports_type(report_type):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        usernames = reports_storage.list_usernames(report_type)
+        return render_template(
+            "reports_type.html",
+            report_type=report_type,
+            title=reports_storage.REPORT_TYPES[report_type],
+            usernames=[
+                {"name": u, "count": len(reports_storage.list_timestamps(report_type, u))}
+                for u in usernames
+            ],
+        )
+
+    @app.get("/admin/reports/<report_type>/<username>")
+    @_admin_required
+    def admin_reports_user(report_type, username):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        return render_template(
+            "reports_user.html",
+            report_type=report_type,
+            title=reports_storage.REPORT_TYPES[report_type],
+            username=username,
+            timestamps=reports_storage.list_timestamps(report_type, username),
+        )
+
+    @app.get("/admin/reports/<report_type>/<username>/<timestamp>")
+    @_admin_required
+    def admin_reports_entry(report_type, username, timestamp):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        try:
+            files = reports_storage.list_files(report_type, username, timestamp)
+        except ReportsUnsafePathError:
+            abort(400)
+        return render_template(
+            "reports_entry.html",
+            report_type=report_type,
+            title=reports_storage.REPORT_TYPES[report_type],
+            username=username,
+            timestamp=timestamp,
+            files=files,
+        )
+
+    @app.get("/admin/reports/<report_type>/<username>/<timestamp>/<filename>")
+    @_admin_required
+    def admin_reports_download(report_type, username, timestamp, filename):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        try:
+            path = reports_storage.get_file_path(report_type, username, timestamp, filename)
+        except ReportsUnsafePathError:
+            abort(400)
+        if not path.is_file():
+            abort(404)
+        return send_file(path, mimetype="application/octet-stream", conditional=True)
+
+    @app.post("/admin/reports/<report_type>/<username>/<timestamp>/delete")
+    @_admin_required
+    def admin_reports_delete(report_type, username, timestamp):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        try:
+            reports_storage.delete_entry(report_type, username, timestamp)
+        except ReportsUnsafePathError:
+            abort(400)
+        return redirect(url_for("admin_reports_user", report_type=report_type, username=username))
+
+    # ── Приём отчётов (Bearer, тот же токен, что и /api/depot/* запись) —
+    #    PUT по одному файлу за раз, та же форма, что и depot_object ниже,
+    #    для единообразия. НИЧЕМ пока не вызывается (лаунчер не трогаем в
+    #    этом заходе) — эндпоинт существует, чтобы включить это одной
+    #    правкой на стороне лаунчера позже, без изменений здесь. ────────────
+
+    @app.put("/api/reports/<report_type>/<username>/<timestamp>/<filename>")
+    def api_reports_upload(report_type, username, timestamp, filename):
+        _require_upload_token()
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404, description=f"неизвестный тип отчёта: {report_type}")
+        try:
+            data = request.get_data(cache=False)
+            reports_storage.put_file(report_type, username, timestamp, filename, data)
+            return jsonify({"status": "ok", "bytes": len(data)}), 201
+        except ReportsUnsafePathError:
+            abort(400, description="некорректный путь")
+
+    # ── Дашборд: место на диске, сеть, CPU/RAM ───────────────────────────────
+    # Прямой запрос пользователя. system_stats.py читает /proc напрямую
+    # (без psutil, см. её докстринг) — cpu_percent() блокирует запрос на
+    # ~0.2с (два замера с паузой), приемлемо для редкого admin-опроса, не
+    # на горячем пути раздачи депо.
+
+    @app.get("/admin/dashboard")
+    @_admin_required
+    def admin_dashboard():
+        return render_template("dashboard.html", disks=system_stats.list_disks())
+
+    @app.get("/admin/dashboard/stats")
+    @_admin_required
+    def admin_dashboard_stats():
+        mountpoint = request.args.get("disk", "")
+        disk = system_stats.disk_usage(mountpoint) if mountpoint else None
+        if disk is None:
+            disks = system_stats.list_disks()
+            disk = disks[0] if disks else None
+        return jsonify({
+            "cpu_percent": system_stats.cpu_percent(),
+            "memory":      system_stats.memory_stats(),
+            "disk":        disk,
+            "network":     system_stats.network_counters(),
+        })
 
     return app
 

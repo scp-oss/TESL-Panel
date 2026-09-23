@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — дашборд</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def;
+      --ok: #4caf6b; --warn: #e5a53f; --danger: #e5555f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar { width: 100%; max-width: 760px; display: flex; justify-content: space-between;
+      align-items: baseline; margin-bottom: 24px; }
+    h1 { font-size: 1.4rem; margin: 0; }
+    .grid { width: 100%; max-width: 760px; display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 14px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 16px 18px; }
+    .card h2 { margin: 0 0 10px; font-size: 0.85rem; color: var(--muted); font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat-value { font-size: 1.6rem; font-weight: 700; }
+    .stat-sub { color: var(--muted); font-size: 0.78rem; margin-top: 2px; }
+    .bar { height: 8px; border-radius: 4px; background: #0f1115; overflow: hidden; margin-top: 10px; }
+    .bar-fill { height: 100%; border-radius: 4px; background: var(--accent); transition: width 0.4s; }
+    .bar-fill.warn { background: var(--warn); }
+    .bar-fill.danger { background: var(--danger); }
+    .wide { width: 100%; max-width: 760px; }
+    select {
+      background: #0f1115; color: var(--text); border: 1px solid var(--card-border);
+      border-radius: 6px; padding: 6px 10px; font-size: 0.85rem;
+    }
+    .legend { display: flex; gap: 18px; font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    canvas { width: 100%; height: 160px; display: block; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1><a href="/admin">&larr;</a> Дашборд</h1>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>CPU</h2>
+      <div class="stat-value" id="cpu-value">—</div>
+      <div class="bar"><div class="bar-fill" id="cpu-bar"></div></div>
+    </div>
+    <div class="card">
+      <h2>ОЗУ</h2>
+      <div class="stat-value" id="mem-value">—</div>
+      <div class="stat-sub" id="mem-sub"></div>
+      <div class="bar"><div class="bar-fill" id="mem-bar"></div></div>
+    </div>
+    <div class="card">
+      <h2>Диск</h2>
+      <div class="stat-value" id="disk-value">—</div>
+      <div class="stat-sub" id="disk-sub"></div>
+      <div class="bar"><div class="bar-fill" id="disk-bar"></div></div>
+    </div>
+  </div>
+
+  <div class="card wide">
+    <h2 style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Диск</span>
+      <select id="disk-select">
+        {% for d in disks %}
+          <option value="{{ d.mountpoint }}">{{ d.mountpoint }} ({{ d.fstype }})</option>
+        {% endfor %}
+      </select>
+    </h2>
+  </div>
+
+  <div class="card wide">
+    <h2>Сеть</h2>
+    <canvas id="net-canvas" width="720" height="160"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background: var(--accent);"></span>Загрузка (входящий)</span>
+      <span><span class="dot" style="background: var(--ok);"></span>Выгрузка (исходящий)</span>
+    </div>
+  </div>
+
+  <script>
+    const cpuValue  = document.getElementById('cpu-value');
+    const cpuBar    = document.getElementById('cpu-bar');
+    const memValue  = document.getElementById('mem-value');
+    const memSub    = document.getElementById('mem-sub');
+    const memBar    = document.getElementById('mem-bar');
+    const diskValue = document.getElementById('disk-value');
+    const diskSub   = document.getElementById('disk-sub');
+    const diskBar   = document.getElementById('disk-bar');
+    const diskSelect = document.getElementById('disk-select');
+    const canvas    = document.getElementById('net-canvas');
+    const ctx       = canvas.getContext('2d');
+
+    function fmtBytes(n) {
+      const units = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+      let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+      return n.toFixed(1) + ' ' + units[i];
+    }
+
+    function barClass(percent) {
+      if (percent >= 90) return 'bar-fill danger';
+      if (percent >= 75) return 'bar-fill warn';
+      return 'bar-fill';
+    }
+
+    let prevNet = null;   // {bytes_recv, bytes_sent, ts}
+    const rxHistory = [];
+    const txHistory = [];
+    const MAX_POINTS = 40;
+
+    function drawGraph() {
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      if (rxHistory.length < 2) return;
+
+      const maxVal = Math.max(1, ...rxHistory, ...txHistory);
+      const stepX = w / (MAX_POINTS - 1);
+      const startIdx = MAX_POINTS - rxHistory.length;
+
+      function drawLine(data, color) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        data.forEach((v, i) => {
+          const x = (startIdx + i) * stepX;
+          const y = h - (v / maxVal) * (h - 10) - 4;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+      drawLine(rxHistory, '#5b8def');
+      drawLine(txHistory, '#4caf6b');
+    }
+
+    async function poll() {
+      try {
+        const disk = diskSelect.value || '';
+        const r = await fetch('/admin/dashboard/stats?disk=' + encodeURIComponent(disk));
+        if (!r.ok) return;
+        const data = await r.json();
+
+        cpuValue.textContent = data.cpu_percent + '%';
+        cpuBar.style.width = data.cpu_percent + '%';
+        cpuBar.className = barClass(data.cpu_percent);
+
+        memValue.textContent = data.memory.percent + '%';
+        memSub.textContent = fmtBytes(data.memory.used) + ' / ' + fmtBytes(data.memory.total);
+        memBar.style.width = data.memory.percent + '%';
+        memBar.className = barClass(data.memory.percent);
+
+        if (data.disk) {
+          diskValue.textContent = data.disk.percent + '%';
+          diskSub.textContent = fmtBytes(data.disk.free) + ' свободно из ' + fmtBytes(data.disk.total);
+          diskBar.style.width = data.disk.percent + '%';
+          diskBar.className = barClass(data.disk.percent);
+        }
+
+        const net = data.network;
+        if (prevNet) {
+          const dt = net.ts - prevNet.ts;
+          if (dt > 0) {
+            const rxRate = Math.max(0, (net.bytes_recv - prevNet.bytes_recv) / dt);
+            const txRate = Math.max(0, (net.bytes_sent - prevNet.bytes_sent) / dt);
+            rxHistory.push(rxRate);
+            txHistory.push(txRate);
+            if (rxHistory.length > MAX_POINTS) { rxHistory.shift(); txHistory.shift(); }
+            drawGraph();
+          }
+        }
+        prevNet = net;
+      } catch (e) {
+        // тихо пропускаем один неудачный опрос — не спамим alert'ами
+      }
+    }
+
+    diskSelect.addEventListener('change', poll);
+    poll();
+    setInterval(poll, 2000);
+  </script>
+</body>
+</html>

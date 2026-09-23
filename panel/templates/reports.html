@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — отчёты</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --accent-hover: #4a78d6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar { width: 100%; max-width: 560px; display: flex; justify-content: space-between;
+      align-items: baseline; margin-bottom: 24px; }
+    h1 { font-size: 1.4rem; margin: 0; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 18px 20px; width: 100%; max-width: 560px; margin-bottom: 14px;
+      display: flex; justify-content: space-between; align-items: center; }
+    .card h2 { margin: 0 0 4px; font-size: 1.05rem; }
+    .card p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+    .count { font-size: 1.6rem; font-weight: 700; color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1><a href="/admin">&larr;</a> Отчёты</h1>
+  </div>
+
+  {% for s in summary %}
+    <a class="card" href="/admin/reports/{{ s.type }}">
+      <div>
+        <h2>{{ s.title }}</h2>
+        <p>Отчётов от клиентов (лаунчеров)</p>
+      </div>
+      <div class="count">{{ s.count }}</div>
+    </a>
+  {% endfor %}
+</body>
+</html>
