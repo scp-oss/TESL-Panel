@@ -11,10 +11,17 @@ ExecStart=__PROJECT_DIR__/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:__PORT
 Restart=on-failure
 RestartSec=5
 
-# Депо может быть крупным (десятки-сотни ГБ чанков) — сервис пишет только
-# внутрь STORAGE_ROOT (задан в panel.env) и своей папки WorkingDirectory,
-# ничего больше трогать не должен.
-NoNewPrivileges=true
+# NoNewPrivileges=true раньше стояло здесь (депо может быть крупным —
+# десятки-сотни ГБ чанков, сервис по идее пишет только внутрь
+# STORAGE_ROOT/WorkingDirectory, ничего больше трогать не должен) — снято
+# 2026-09-23 ради self-update из /admin/settings (см. panel/self_update.py
+# и CLAUDE.md "Self-update панели"): git pull + systemctl restart идут
+# через sudo -n на ДВЕ конкретные команды (см. deploy.sh, "sudoers для
+# self-update"), а sudo — setuid-бинарник, NoNewPrivileges=true запрещает
+# ЛЮБУЮ эскалацию через setuid/setcap целиком, включая эту. Прямой
+# trade-off: сервис и так уже мог писать любой файл под STORAGE_ROOT (это
+# его основная работа), новые sudo-права — ровно две явно перечисленные в
+# sudoers команды, не root целиком.
 
 [Install]
 WantedBy=multi-user.target

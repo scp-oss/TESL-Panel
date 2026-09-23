@@ -85,6 +85,27 @@
       margin-bottom: 12px;
     }
     .copied { color: #4caf6b; font-size: 0.85rem; margin-left: 10px; }
+    .ok {
+      background: rgba(76, 175, 107, 0.12);
+      border: 1px solid #4caf6b;
+      color: #4caf6b;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.85rem;
+      margin-top: 12px;
+    }
+    .err {
+      background: rgba(229, 85, 95, 0.12);
+      border: 1px solid #e5555f;
+      color: #e5555f;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.85rem;
+      margin-top: 12px;
+    }
+    .muted-line { color: var(--muted); font-size: 0.85rem; margin-top: 10px; }
+    code { font-family: Consolas, monospace; }
+    form.inline { display: inline; }
   </style>
 </head>
 <body>
@@ -116,6 +137,47 @@
     <textarea id="setup-code" readonly onclick="this.select()">{{ setup_code }}</textarea>
     <button onclick="copyCode()">📋 Скопировать</button>
     <span class="copied" id="copied-msg" style="display:none;">Скопировано!</span>
+  </div>
+
+  <div class="card">
+    <h2>Обновление панели</h2>
+    <p>
+      Проверка — только чтение (сравнивает локальный коммит с
+      <code>origin/main</code> на GitHub, ничего не меняет). Обновление —
+      <code>git pull --ff-only</code> + перезапуск сервиса; требует
+      sudo-грант, который ставит <code>infra/deploy.sh</code>
+      (идемпотентно, при повторном запуске на сервере).
+    </p>
+
+    <form method="post" action="/admin/settings/check-updates" class="inline">
+      <button type="submit">🔍 Проверить обновления</button>
+    </form>
+
+    {% if update_info %}
+      {% if update_info.error %}
+        <div class="err">❌ {{ update_info.error }}</div>
+      {% elif update_info.up_to_date %}
+        <div class="ok">✅ Актуально (<code>{{ update_info.local }}</code>)</div>
+      {% else %}
+        <div class="warn">
+          ⚠️ Доступно обновление: <code>{{ update_info.local }}</code> →
+          <code>{{ update_info.remote }}</code>
+        </div>
+        <form method="post" action="/admin/settings/apply-update">
+          <button type="submit" onclick="return confirm('Обновить панель и перезапустить сервис?');">
+            ⬆️ Обновить и перезапустить
+          </button>
+        </form>
+      {% endif %}
+    {% endif %}
+
+    {% if update_result %}
+      {% if update_result.ok %}
+        <div class="ok">✅ {{ update_result.message }}</div>
+      {% else %}
+        <div class="err">❌ {{ update_result.message }}</div>
+      {% endif %}
+    {% endif %}
   </div>
 
   <script>

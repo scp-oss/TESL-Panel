@@ -157,6 +157,25 @@ sed \
 # (обычно root), сервисному юзеру достаточно прав на чтение+исполнение.
 chmod -R o+rX "$PROJECT_DIR"
 
+# ── sudoers для self-update (идемпотентно, тот же принцип, что
+#    ensure_panel_runtime_grants() в z2r_autobench — литеральные команды,
+#    без wildcard-путей, visudo -cf проверяет ПЕРЕД тем, как заменить
+#    рабочий файл) — panel/self_update.py::apply_update() дёргает эти
+#    ровно две команды через `sudo -n`, ничего шире. ────────────────────────
+SUDOERS_FILE="/etc/sudoers.d/tesl-panel-self-update"
+SUDOERS_TMP="$(mktemp)"
+cat > "$SUDOERS_TMP" <<EOF
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/git -C $PROJECT_DIR pull --ff-only
+$SERVICE_USER ALL=(root) NOPASSWD: /usr/bin/systemctl restart tesl-panel.service
+EOF
+if visudo -cf "$SUDOERS_TMP" >/dev/null 2>&1; then
+    install -m 440 "$SUDOERS_TMP" "$SUDOERS_FILE"
+    echo "-> sudoers-грант self-update установлен ($SUDOERS_FILE)"
+else
+    echo "⚠️  Сгенерированный sudoers-файл не прошёл visudo -cf — self-update из /admin/settings работать не будет, остальной деплой продолжается" >&2
+fi
+rm -f "$SUDOERS_TMP"
+
 systemctl daemon-reload
 systemctl enable tesl-panel.service >/dev/null
 systemctl restart tesl-panel.service

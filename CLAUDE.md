@@ -73,6 +73,52 @@ z0r-panel, TESL, TESL-Manager). `infra/deploy.sh` только готовитс�
 - `GET /api/depot/<project>/test` — проверка достижимости + (неявно,
   через отдельный `PUT`-запрос до этого) валидности токена.
 
+## Self-update панели из `/admin/settings` (2026-09-23)
+
+Прямой запрос пользователя: кнопка обновить саму панель, если доступна
+новая версия, в её собственных настройках.
+
+- **Проверка** (`self_update.check_for_updates()`) — ничего не пишет:
+  `git rev-parse HEAD` (локально) + `git ls-remote origin HEAD` (сеть,
+  БЕЗ побочного эффекта записи в `.git`, в отличие от `git fetch`).
+  Выбрано намеренно из-за прав на диске: `deploy.sh` оставляет сам
+  чекаут во владении того, кто его склонировал (обычно root), сервисный
+  пользователь `tesl-panel` получает только `o+rX` (чтение+исполнение,
+  см. `chmod -R o+rX "$PROJECT_DIR"` в `deploy.sh`) — `git fetch`/`pull`
+  от его имени напрямую упали бы на попытке создать lock-файл в `.git/`.
+- **Применение** (`self_update.apply_update()`) — `git pull --ff-only`
+  через `sudo -n`, затем fire-and-forget `systemctl restart
+  tesl-panel.service` (тем же sudo) — ответ HTTP собирается и
+  отправляется ДО рестарта, поскольку рестарт убивает сам обрабатывающий
+  запрос процесс.
+- **`NoNewPrivileges=true` снято из systemd-юнита** (было в
+  `tesl-panel.service.template`) — конфликтует с самой идеей sudo:
+  `sudo` — setuid-бинарник, `NoNewPrivileges=true` запрещает ЛЮБУЮ
+  эскалацию через setuid/setcap, включая легитимную через sudoers.
+  Реальный trade-off, не тихая дыра: сервис и так уже мог писать любой
+  файл под `STORAGE_ROOT` (это его основная работа — приём чанков), а
+  sudo добавляет ровно ДВЕ явно перечисленные в `/etc/sudoers.d/
+  tesl-panel-self-update` команды (`git -C <repo> pull --ff-only` и
+  `systemctl restart tesl-panel.service`), не root целиком.
+- **`deploy.sh`** ставит этот sudoers-файл идемпотентно на каждом
+  запуске (`visudo -cf` на временный файл ПЕРЕД установкой, `install -m
+  440`, тот же принцип "проверить перед заменой рабочего", что и
+  `ensure_panel_runtime_grants` в z2r_autobench использует для своих
+  грантов) — существующие деплои получат его при следующем `git pull &&
+  sudo ./infra/deploy.sh ...`, до этого кнопка "Обновить и
+  перезапустить" будет честно отвечать "нет прав на sudo" вместо
+  тихого зависания.
+- Кнопка обновления показывается только когда проверка нашла реальное
+  расхождение (`update_info.up_to_date == False`) — сама проверка не
+  выполняется на каждой загрузке `/admin/settings` (только по кнопке
+  "🔍 Проверить обновления"), чтобы не дёргать GitHub при каждом заходе
+  на страницу настроек.
+- Проверено `Flask.test_client()` с замоканными `self_update.
+  check_for_updates`/`apply_update` (актуально/есть обновление/успех/
+  отказ — все четыре ветки рендера), плюс реальный
+  `check_for_updates()` — против настоящего репозитория и GitHub из
+  песочницы (`git ls-remote origin HEAD` действительно отработал).
+
 ## Projects/Files API (JSON, для десктоп-GUI TESL-Manager, 2026-09-23)
 
 Добавлено под конкретную нужду TESL-Manager'а: `depot_tab.py` там

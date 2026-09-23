@@ -24,7 +24,7 @@ from flask import (
     session, url_for,
 )
 
-from . import config, github_releases, projects, storage
+from . import config, github_releases, projects, self_update, storage
 from .storage import UnsafePathError
 
 
@@ -124,6 +124,31 @@ def create_app() -> Flask:
             "settings.html",
             setup_code=_generate_setup_code(),
             has_token=bool(config.UPLOAD_TOKEN),
+            update_info=None,
+            update_result=None,
+        )
+
+    @app.post("/admin/settings/check-updates")
+    @_admin_required
+    def admin_settings_check_updates():
+        return render_template(
+            "settings.html",
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+            update_info=self_update.check_for_updates(),
+            update_result=None,
+        )
+
+    @app.post("/admin/settings/apply-update")
+    @_admin_required
+    def admin_settings_apply_update():
+        ok, msg = self_update.apply_update()
+        return render_template(
+            "settings.html",
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+            update_info=None,
+            update_result={"ok": ok, "message": msg},
         )
 
     @app.get("/admin/project/<name>")
