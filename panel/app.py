@@ -18,7 +18,7 @@ TESL-Panel — тонкий веб-сервис с двумя ролями:
 from functools import wraps
 
 from flask import (
-    Flask, Response, abort, jsonify, redirect, render_template, request,
+    Flask, abort, jsonify, redirect, render_template, request, send_file,
     session, url_for,
 )
 
@@ -249,13 +249,24 @@ def create_app() -> Flask:
                 storage.put_bytes(project, rel_path, data)
                 return jsonify({"status": "ok", "bytes": len(data)}), 201
 
-            # GET/HEAD — публичное чтение, токен не нужен.
-            if not storage.exists(project, rel_path):
+            # GET/HEAD — публичное чтение, токен не нужен. send_file(...,
+            # conditional=True) — а не Response(data, ...) как раньше —
+            # даёт настоящую поддержку Range-запросов (206 Partial
+            # Content), нужную для pack-файлов (см. pack_writer.py в
+            # TESL-Manager, CLAUDE.md "Упаковка чанков в pack-файлы"):
+            # pack может весить сотни МБ, а читателю (launcher/панели)
+            # нужны байты ОДНОГО чанка внутри него — без Range пришлось
+            # бы каждый раз скачивать весь pack целиком. Werkzeug сам
+            # читает файл через seek()/частичное чтение, не грузит его в
+            # память целиком ни на PUT-время (уже было потоково), ни
+            # здесь на чтение.
+            path = storage.safe_path(project, rel_path)
+            if not path.is_file():
                 abort(404)
-            if request.method == "HEAD":
-                return Response(status=200)
-            data = storage.get_bytes(project, rel_path)
-            return Response(data, mimetype="application/octet-stream")
+            return send_file(
+                path, mimetype="application/octet-stream",
+                conditional=True, etag=False, last_modified=None,
+            )
         except UnsafePathError:
             abort(400, description="некорректный путь")
 
