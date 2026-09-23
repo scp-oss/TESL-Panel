@@ -450,7 +450,11 @@ def create_app() -> Flask:
     @_admin_required
     def admin_reports():
         summary = [
-            {"type": t, "title": title, "count": reports_storage.count_entries(t)}
+            {
+                "type": t, "title": title,
+                "source": reports_storage.REPORT_SOURCES.get(t, ""),
+                "count": reports_storage.count_entries(t),
+            }
             for t, title in reports_storage.REPORT_TYPES.items()
         ]
         return render_template("reports.html", summary=summary)
