@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — вход</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --accent-hover: #4a78d6; --danger: #e5555f; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 24px; width: 100%; max-width: 340px; }
+    h1 { font-size: 1.1rem; margin: 0 0 16px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+    input { width: 100%; padding: 9px 10px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: #0f1115; color: var(--text); font-size: 0.9rem; }
+    button { margin-top: 16px; width: 100%; background: var(--accent); color: #fff; border: none;
+      padding: 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button:hover { background: var(--accent-hover); }
+    .error { color: var(--danger); font-size: 0.85rem; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>TESL-Panel — вход</h1>
+    <form method="post" action="/admin/login">
+      <label for="token">Upload-токен</label>
+      <input type="password" id="token" name="token" autofocus required>
+      <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+      <button type="submit">Войти</button>
+      {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    </form>
+  </div>
+</body>
+</html>

@@ -76,3 +76,12 @@ def add_project(name: str) -> bool:
             names.append(name)
             _save(names)
     return True
+
+
+def remove_project(name: str) -> None:
+    """Идемпотентно — не ошибка, если имени уже не было в списке."""
+    with _lock:
+        names = _load()
+        if name in names:
+            names.remove(name)
+            _save(names)

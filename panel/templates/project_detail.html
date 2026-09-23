@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — {{ name }}</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --danger: #e5555f; --danger-hover: #c8434c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); }
+    h1 { font-size: 1.3rem; margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 20px; width: 100%; max-width: 480px; margin-bottom: 16px; }
+    .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--muted); }
+    dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 0.9rem; }
+    dt { color: var(--muted); }
+    dd { margin: 0; }
+    ul { margin: 0; padding-left: 18px; font-size: 0.85rem; }
+    li { margin-bottom: 3px; word-break: break-all; }
+    .danger-btn { background: var(--danger); color: #fff; border: none; padding: 9px 16px;
+      border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .danger-btn:hover { background: var(--danger-hover); }
+    input.confirm { width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: #0f1115; color: var(--text); margin: 8px 0; }
+  </style>
+</head>
+<body>
+  <h1><a href="/admin">&larr; Сборки</a> / {{ name }}</h1>
+
+  <div class="card">
+    <h2>depot.json</h2>
+    {% if depot_meta %}
+      {% for channel, info in depot_meta.get('channels', {}).items() %}
+        <dl>
+          <dt>Канал</dt><dd>{{ channel }}</dd>
+          <dt>Build #</dt><dd>{{ info.get('build_number', '?') }}</dd>
+          <dt>build_id</dt><dd><code>{{ info.get('build_id', '?') }}</code></dd>
+          <dt>Файлов</dt><dd>{{ info.get('file_count', '?') }}</dd>
+          <dt>Размер</dt><dd>{{ (info.get('total_size', 0) / 1024 / 1024 / 1024) | round(2) }} ГБ</dd>
+          <dt>Обновлено</dt><dd>{{ depot_meta.get('updated_at', '?') }}</dd>
+        </dl>
+      {% endfor %}
+    {% else %}
+      <p style="color: var(--muted);">Публикаций ещё не было — depot.json отсутствует.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Версии ({{ versions | length }})</h2>
+    {% if versions %}
+      <ul>{% for v in versions %}<li>{{ v }}</li>{% endfor %}</ul>
+    {% else %}
+      <p style="color: var(--muted);">Пусто.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2 style="color: var(--danger);">Удалить сборку целиком</h2>
+    <p style="color: var(--muted); font-size: 0.85rem;">
+      Необратимо удаляет ВСЕ чанки и версии этого проекта с диска. Чтобы подтвердить,
+      напечатай имя сборки ещё раз: <code>{{ name }}</code>
+    </p>
+    <form method="post" action="/admin/project/{{ name }}/delete"
+          onsubmit="return confirm('Точно удалить {{ name }} безвозвратно?');">
+      <input class="confirm" type="text" name="confirm" placeholder="{{ name }}" required>
+      <button class="danger-btn" type="submit">Удалить {{ name }}</button>
+    </form>
+  </div>
+</body>
+</html>

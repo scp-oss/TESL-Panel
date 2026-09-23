@@ -15,7 +15,12 @@ TESL-Panel — тонкий веб-сервис с двумя ролями:
      (тот же принцип, что и у read-only nginx-плана в TESL-Manager: чтение
      депо не секрет, запись — да).
 """
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, url_for
+from functools import wraps
+
+from flask import (
+    Flask, Response, abort, jsonify, redirect, render_template, request,
+    session, url_for,
+)
 
 from . import config, github_releases, projects, storage
 from .storage import UnsafePathError
@@ -23,6 +28,7 @@ from .storage import UnsafePathError
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.secret_key = config.SECRET_KEY
 
     # ── Публичная страница ──────────────────────────────────────────────────
 
@@ -39,30 +45,85 @@ def create_app() -> Flask:
     def health():
         return jsonify({"status": "ok"})
 
-    # ── Admin: список сборок + добавление новой (без передеплоя, см.
-    #    projects.py) ──────────────────────────────────────────────────────────
+    # ── Admin: логин по UPLOAD_TOKEN (тот же токен, что и у /api/depot/*
+    #    записи — см. config.py, зачем не два разных секрета), дальше
+    #    сессия по подписанной cookie (SECRET_KEY) — управление сборками
+    #    ниже требует эту сессию на КАЖДЫЙ запрос, не только на страницу
+    #    логина. ─────────────────────────────────────────────────────────────
 
     def _token_valid(token: str) -> bool:
         return bool(config.UPLOAD_TOKEN) and token == config.UPLOAD_TOKEN
 
+    def _admin_required(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if not session.get("admin"):
+                return redirect(url_for("admin_login", next=request.path))
+            return view(*args, **kwargs)
+        return wrapped
+
+    @app.get("/admin/login")
+    def admin_login():
+        return render_template("login.html", error=None)
+
+    @app.post("/admin/login")
+    def admin_login_post():
+        token = request.form.get("token", "")
+        if not _token_valid(token):
+            return render_template("login.html", error="Неверный токен"), 401
+        session["admin"] = True
+        session.permanent = True
+        next_path = request.form.get("next") or url_for("admin_page")
+        return redirect(next_path)
+
+    @app.get("/admin/logout")
+    def admin_logout():
+        session.pop("admin", None)
+        return redirect(url_for("admin_login"))
+
+    # ── Admin: список сборок, добавление/удаление — без передеплоя/
+    #    рестарта, см. projects.py ────────────────────────────────────────────
+
     @app.get("/admin")
+    @_admin_required
     def admin_page():
         return render_template("admin.html", projects=projects.list_projects(), error=None)
 
     @app.post("/admin/add-project")
+    @_admin_required
     def admin_add_project():
-        token = request.form.get("token", "")
-        name  = request.form.get("project", "").strip()
-        if not _token_valid(token):
-            return render_template(
-                "admin.html", projects=projects.list_projects(),
-                error="Неверный токен",
-            ), 401
+        name = request.form.get("project", "").strip()
         if not projects.add_project(name):
             return render_template(
                 "admin.html", projects=projects.list_projects(),
                 error=f"Недопустимое имя: {name!r} (только буквы/цифры/_/-, до 64 симв.)",
             ), 400
+        return redirect(url_for("admin_page"))
+
+    @app.get("/admin/project/<name>")
+    @_admin_required
+    def admin_project_detail(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        return render_template(
+            "project_detail.html",
+            name=name,
+            depot_meta=storage.get_depot_meta(name),
+            versions=storage.list_versions(name),
+        )
+
+    @app.post("/admin/project/<name>/delete")
+    @_admin_required
+    def admin_project_delete(name):
+        # Печатать имя сборки заново в форме — самая простая защита от
+        # "случайно ткнул кнопку" для необратимого действия (удаляет ВСЕ
+        # чанки/версии проекта с диска) — тот же принцип, что и у
+        # confirmBulkDelete() в z0r-panel (JS там, тут — server-side).
+        if request.form.get("confirm", "") != name:
+            abort(400, description="имя для подтверждения не совпадает")
+        if projects.is_allowed(name):
+            storage.delete_project_dir(name)
+            projects.remove_project(name)
         return redirect(url_for("admin_page"))
 
     # ── Depot API ────────────────────────────────────────────────────────────

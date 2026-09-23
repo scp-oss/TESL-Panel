@@ -8,7 +8,9 @@ depot.json, poster.png) — тот же формат, который уже по
 меняет только транспорт (HTTP PUT сюда вместо WebDAV PUT в Nextcloud), не
 формат данных.
 """
+import json
 import os
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -77,3 +79,39 @@ def list_chunk_ids(project: str) -> List[str]:
             if f.is_file():
                 ids.append(f.name)
     return ids
+
+
+def list_versions(project: str) -> List[str]:
+    """Имена файлов версий (versions/<key>.json|.db) — для страницы
+    /admin/project/<name>, самая свежая публикация первой."""
+    versions_dir = safe_path(project, "versions")
+    if not versions_dir.is_dir():
+        return []
+    return sorted(
+        (f.name for f in versions_dir.iterdir() if f.is_file()),
+        reverse=True,
+    )
+
+
+def get_depot_meta(project: str) -> Optional[dict]:
+    """depot.json, разобранный — если публикаций ещё не было, файла нет,
+    возвращаем None (не ошибка, обычное состояние свежедобавленного
+    проекта)."""
+    data = get_bytes(project, "depot.json")
+    if data is None:
+        return None
+    try:
+        return json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+
+
+def delete_project_dir(project: str) -> None:
+    """Удаляет ВСЁ содержимое проекта с диска — вызывающий (app.py) уже
+    убрал имя из projects.py's allowlist к этому моменту или делает это
+    сразу следом; порядок не важен для самой функции, но app.py удаляет
+    директорию ПЕРЕД тем, как убрать имя из списка — чтобы `_project_root()`
+    ниже ещё проходило проверку `is_allowed`, а не падало раньше времени."""
+    root = _project_root(project)
+    if root.exists():
+        shutil.rmtree(root)

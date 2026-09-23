@@ -111,20 +111,34 @@ fi
 "$PROJECT_DIR/.venv/bin/pip" install -q --upgrade pip
 "$PROJECT_DIR/.venv/bin/pip" install -q -r "$PROJECT_DIR/requirements.txt"
 
-# ── panel.env — токен генерируется один раз, сохраняется между запусками ──
+# ── panel.env — токен/секрет сессии генерируются один раз, сохраняются
+#    между запусками ──────────────────────────────────────────────────────
 ENV_FILE="$PROJECT_DIR/panel.env"
-if [[ -f "$ENV_FILE" && -z "$UPLOAD_TOKEN" ]]; then
-    echo "-> panel.env уже существует, токен НЕ перегенерирую (передай --upload-token, если нужно сменить)"
-    UPLOAD_TOKEN="$(grep -oP '(?<=^TESL_PANEL_UPLOAD_TOKEN=).*' "$ENV_FILE" || true)"
+SECRET_KEY=""
+if [[ -f "$ENV_FILE" ]]; then
+    if [[ -z "$UPLOAD_TOKEN" ]]; then
+        echo "-> panel.env уже существует, токен НЕ перегенерирую (передай --upload-token, если нужно сменить)"
+        UPLOAD_TOKEN="$(grep -oP '(?<=^TESL_PANEL_UPLOAD_TOKEN=).*' "$ENV_FILE" || true)"
+    fi
+    SECRET_KEY="$(grep -oP '(?<=^TESL_PANEL_SECRET_KEY=).*' "$ENV_FILE" || true)"
 fi
 if [[ -z "$UPLOAD_TOKEN" ]]; then
     UPLOAD_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(24))')"
     echo "-> сгенерирован новый upload-токен"
 fi
+if [[ -z "$SECRET_KEY" ]]; then
+    # Отдельный от UPLOAD_TOKEN секрет — подписывает cookie сессии в
+    # /admin, менять его отдельно от токена смысла нет, но раз уж Flask
+    # ожидает именно app.secret_key, а не сам токен, — не переиспользуем
+    # один параметр под две разные роли (подпись cookie vs пароль входа).
+    SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+    echo "-> сгенерирован новый секрет сессии"
+fi
 
 cat > "$ENV_FILE" <<EOF
 TESL_PANEL_STORAGE_ROOT=$STORAGE_ROOT
 TESL_PANEL_UPLOAD_TOKEN=$UPLOAD_TOKEN
+TESL_PANEL_SECRET_KEY=$SECRET_KEY
 TESL_PANEL_PROJECTS=$PROJECTS
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"

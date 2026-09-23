@@ -14,7 +14,6 @@
       --muted: #9aa3b2;
       --accent: #5b8def;
       --accent-hover: #4a78d6;
-      --danger: #e5555f;
     }
     * { box-sizing: border-box; }
     body {
@@ -28,7 +27,18 @@
       align-items: center;
       padding: 48px 16px;
     }
-    h1 { font-size: 1.4rem; margin: 0 0 24px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .topbar {
+      width: 100%;
+      max-width: 420px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 24px;
+    }
+    h1 { font-size: 1.4rem; margin: 0; }
+    .logout { font-size: 0.85rem; color: var(--muted); }
     .card {
       background: var(--card);
       border: 1px solid var(--card-border);
@@ -39,8 +49,14 @@
       margin-bottom: 16px;
     }
     .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--muted); }
-    ul { margin: 0; padding-left: 20px; }
-    li { margin-bottom: 4px; }
+    ul { margin: 0; padding-left: 0; list-style: none; }
+    li {
+      display: flex;
+      justify-content: space-between;
+      padding: 6px 0;
+      border-bottom: 1px solid var(--card-border);
+    }
+    li:last-child { border-bottom: none; }
     label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
     input {
       width: 100%;
@@ -62,21 +78,22 @@
       cursor: pointer;
     }
     button:hover { background: var(--accent-hover); }
-    .error {
-      color: var(--danger);
-      font-size: 0.85rem;
-      margin-top: 8px;
-    }
+    .error { color: #e5555f; font-size: 0.85rem; margin-top: 8px; }
   </style>
 </head>
 <body>
-  <h1>TESL-Panel — сборки</h1>
+  <div class="topbar">
+    <h1>Сборки</h1>
+    <a class="logout" href="/admin/logout">выйти</a>
+  </div>
 
   <div class="card">
     <h2>Текущие project'ы</h2>
     {% if projects %}
       <ul>
-        {% for p in projects %}<li><code>{{ p }}</code></li>{% endfor %}
+        {% for p in projects %}
+          <li><a href="/admin/project/{{ p }}"><code>{{ p }}</code></a></li>
+        {% endfor %}
       </ul>
     {% else %}
       <p style="color: var(--muted);">Пока ни одной.</p>
@@ -88,8 +105,6 @@
     <form method="post" action="/admin/add-project">
       <label for="project">Имя сборки (буквы/цифры/_/-, до 64 симв.)</label>
       <input type="text" id="project" name="project" required pattern="[A-Za-z0-9_-]{1,64}">
-      <label for="token">Upload-токен</label>
-      <input type="password" id="token" name="token" required>
       <button type="submit">Добавить</button>
       {% if error %}<div class="error">{{ error }}</div>{% endif %}
     </form>
