@@ -24,16 +24,20 @@
 #   3. В Cloudflare: A/AAAA-запись на этот сервер, статус "Proxied"
 #      (оранжевое облако), SSL/TLS mode = "Full (strict)".
 #
-# Использование (первый запуск — генерирует upload-токен сам и печатает
-# его в конце, СОХРАНИ его, он нужен для настройки TESL-Manager):
+# Использование (первый запуск — --domain и --storage-root ОБЯЗАТЕЛЬНЫ,
+# panel.env ещё не существует, брать значения неоткуда; скрипт сам
+# генерирует upload-токен и печатает его в конце, СОХРАНИ его, он нужен
+# для настройки TESL-Manager):
 #   sudo ./infra/deploy.sh --domain panel.example.com \
 #       --storage-root /mnt/1tb-1 --projects TESVAE
 #
-# Повторный запуск (обновление кода/конфига) — идемпотентен, тот же токен
-# сохраняется (перечитывается из уже существующего panel.env, не
-# перегенерируется):
-#   git pull && sudo ./infra/deploy.sh --domain panel.example.com \
-#       --storage-root /mnt/1tb-1 --projects TESVAE
+# Повторный запуск (обновление кода/конфига) — идемпотентен, токен/секрет
+# сессии сохраняются (перечитываются из уже существующего panel.env, не
+# перегенерируются). --domain/--storage-root тоже можно не передавать —
+# если panel.env уже существует, они читаются оттуда же:
+#   git pull && sudo ./infra/deploy.sh
+# Явно передавать их всё ещё можно (например, чтобы СМЕНИТЬ домен/путь
+# хранилища) — флаг всегда имеет приоритет над тем, что уже в panel.env.
 
 set -euo pipefail
 
@@ -71,8 +75,27 @@ if [[ $EUID -ne 0 ]]; then
     echo "Запускать через sudo/от root — нужно писать в /etc/systemd, /etc/nginx." >&2
     exit 1
 fi
+
+# ── --domain/--storage-root необязательны на ПОВТОРНОМ запуске, если уже
+#    есть panel.env от предыдущего деплоя — читаем оттуда как fallback
+#    (тот же принцип, что уже был у UPLOAD_TOKEN/SECRET_KEY ниже: не
+#    перегенерировать то, что уже настроено). На первом запуске файла
+#    ещё нет — флаги остаются обязательными, ошибка ниже не изменилась.
+_EARLY_ENV_FILE="$PROJECT_DIR/panel.env"
+if [[ -f "$_EARLY_ENV_FILE" ]]; then
+    if [[ -z "$DOMAIN" ]]; then
+        DOMAIN="$(grep -oP '(?<=^TESL_PANEL_DOMAIN=).*' "$_EARLY_ENV_FILE" || true)"
+        [[ -n "$DOMAIN" ]] && echo "-> --domain не передан, беру из panel.env: $DOMAIN"
+    fi
+    if [[ -z "$STORAGE_ROOT" ]]; then
+        STORAGE_ROOT="$(grep -oP '(?<=^TESL_PANEL_STORAGE_ROOT=).*' "$_EARLY_ENV_FILE" || true)"
+        [[ -n "$STORAGE_ROOT" ]] && echo "-> --storage-root не передан, беру из panel.env: $STORAGE_ROOT"
+    fi
+fi
 if [[ -z "$DOMAIN" || -z "$STORAGE_ROOT" ]]; then
-    echo "Нужны минимум --domain и --storage-root. См. докстринг файла за примером." >&2
+    echo "Нужны минимум --domain и --storage-root (в первый раз — явно;" >&2
+    echo "при повторном деплое достаточно, если они уже есть в panel.env" >&2
+    echo "от предыдущего запуска). См. докстринг файла за примером." >&2
     exit 1
 fi
 if [[ ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ]]; then
