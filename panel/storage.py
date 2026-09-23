@@ -106,6 +106,43 @@ def get_depot_meta(project: str) -> Optional[dict]:
         return None
 
 
+# Выше этого размера файл не редактируется инлайн в /admin (только
+# просмотр/скачивание/удаление) — большие чанки (до 4MB, см.
+# TESL-Manager's chunk_manager.py::DEFAULT_CHUNK_SIZE) незачем гонять
+# туда-обратно текстовым полем в браузере.
+MAX_INLINE_EDIT_BYTES = 256 * 1024
+
+
+def list_files(project: str) -> List[dict]:
+    """Плоский список ВСЕХ файлов под папкой проекта (chunks/versions/
+    depot.json/что угодно ещё туда положили) — для /admin/project/<name>/files.
+    Не постранично и не оптимизировано под десятки тысяч чанков реальной
+    сборки — для текущего размера использования (пустой/тестовый проект)
+    достаточно; если это станет узким местом на боевой сборке, первый
+    кандидат на доработку — сворачивать chunks/ в одну строку с общим
+    количеством/размером вместо построчного перечисления каждого чанка."""
+    root = _project_root(project)
+    if not root.is_dir():
+        return []
+    out = []
+    for f in root.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(root).as_posix()
+            out.append({"path": rel, "size": f.stat().st_size})
+    out.sort(key=lambda e: e["path"])
+    return out
+
+
+def delete_file(project: str, rel_path: str) -> bool:
+    """True — файл существовал и удалён. False — его и так не было
+    (идемпотентно, не ошибка)."""
+    path = safe_path(project, rel_path)
+    if not path.is_file():
+        return False
+    path.unlink()
+    return True
+
+
 def delete_project_dir(project: str) -> None:
     """Удаляет ВСЁ содержимое проекта с диска — вызывающий (app.py) уже
     убрал имя из projects.py's allowlist к этому моменту или делает это

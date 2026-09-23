@@ -126,6 +126,91 @@ def create_app() -> Flask:
             projects.remove_project(name)
         return redirect(url_for("admin_page"))
 
+    # ── Admin: файловый менеджер проекта (список/просмотр/правка/добавление/
+    #    удаление отдельных файлов внутри STORAGE_ROOT/<project>/) — работает
+    #    поверх той же storage.py, что и /api/depot, просто с UI и без
+    #    Bearer-токена (сессия /admin уже подтверждает то же самое доверие).
+    #    "Правка" — только для небольших (см. storage.MAX_INLINE_EDIT_BYTES)
+    #    и декодируемых как UTF-8 файлов; для остального — скачать/заменить/
+    #    удалить целиком, инлайн-редактор бинарных чанков не имеет смысла
+    #    (они адресуются по хэшу своего же содержимого — руками поправленный
+    #    чанк развалит все ссылающиеся на него файлы). ──────────────────────
+
+    @app.get("/admin/project/<name>/files")
+    @_admin_required
+    def admin_files(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        return render_template(
+            "files.html", name=name, files=storage.list_files(name), error=None,
+        )
+
+    @app.get("/admin/project/<name>/files/edit")
+    @_admin_required
+    def admin_file_edit(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        rel_path = request.args.get("path", "").strip()
+        content = ""
+        too_big = False
+        binary = False
+        if rel_path:
+            data = storage.get_bytes(name, rel_path)
+            if data is not None:
+                if len(data) > storage.MAX_INLINE_EDIT_BYTES:
+                    too_big = True
+                else:
+                    try:
+                        content = data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        binary = True
+        return render_template(
+            "file_edit.html", name=name, rel_path=rel_path, content=content,
+            too_big=too_big, binary=binary,
+        )
+
+    @app.post("/admin/project/<name>/files/edit")
+    @_admin_required
+    def admin_file_edit_post(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        rel_path = request.form.get("path", "").strip()
+        content  = request.form.get("content", "")
+        if not rel_path:
+            abort(400, description="путь не указан")
+        try:
+            storage.put_bytes(name, rel_path, content.encode("utf-8"))
+        except UnsafePathError:
+            abort(400, description="некорректный путь")
+        return redirect(url_for("admin_files", name=name))
+
+    @app.post("/admin/project/<name>/files/upload")
+    @_admin_required
+    def admin_file_upload(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        f = request.files.get("file")
+        rel_path = request.form.get("path", "").strip() or (f.filename if f else "")
+        if not f or not rel_path:
+            abort(400, description="нужны и файл, и путь назначения")
+        try:
+            storage.put_bytes(name, rel_path, f.read())
+        except UnsafePathError:
+            abort(400, description="некорректный путь")
+        return redirect(url_for("admin_files", name=name))
+
+    @app.post("/admin/project/<name>/files/delete")
+    @_admin_required
+    def admin_file_delete(name):
+        if not projects.is_allowed(name):
+            abort(404)
+        rel_path = request.form.get("path", "").strip()
+        try:
+            storage.delete_file(name, rel_path)
+        except UnsafePathError:
+            abort(400, description="некорректный путь")
+        return redirect(url_for("admin_files", name=name))
+
     # ── Depot API ────────────────────────────────────────────────────────────
 
     def _check_project(project: str):

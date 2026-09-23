@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — редактор {{ name }}</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --accent-hover: #4a78d6; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); }
+    h1 { font-size: 1.3rem; margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 20px; width: 100%; max-width: 640px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 4px 0 4px; }
+    input[type=text] {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: #0f1115; color: var(--text); font-size: 0.9rem; margin-bottom: 12px;
+    }
+    textarea {
+      width: 100%; min-height: 360px; padding: 10px; border-radius: 6px;
+      border: 1px solid var(--card-border); background: #0f1115; color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.85rem;
+      resize: vertical;
+    }
+    button.submit { margin-top: 16px; background: var(--accent); color: #fff; border: none;
+      padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button.submit:hover { background: var(--accent-hover); }
+    .warn { color: var(--muted); font-size: 0.85rem; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1><a href="/admin/project/{{ name }}/files">&larr; {{ name }} / файлы</a></h1>
+
+  <div class="card">
+    {% if too_big %}
+      <p class="warn">Файл больше 256 КБ — инлайн-редактор не показывает такие (обычно это
+        chunk с бинарными данными). <a href="/api/depot/{{ name }}/{{ rel_path }}">Скачать</a>,
+        отредактировать локально и загрузить обратно через форму "Загрузить файл" на странице
+        файлов, если это реально нужно.</p>
+    {% elif binary %}
+      <p class="warn">Файл не декодируется как текст (похоже на бинарные данные —
+        обычно так и есть для chunks/*). <a href="/api/depot/{{ name }}/{{ rel_path }}">Скачать</a>
+        вместо правки инлайн.</p>
+    {% endif %}
+
+    <form method="post" action="/admin/project/{{ name }}/files/edit">
+      <label for="path">Путь (существующий — правка, новый — создание файла)</label>
+      <input type="text" id="path" name="path" value="{{ rel_path }}" required
+             {% if rel_path %}readonly{% endif %}>
+      <label for="content">Содержимое</label>
+      <textarea id="content" name="content" {% if too_big or binary %}disabled{% endif %}
+        >{{ content }}</textarea>
+      <button class="submit" type="submit" {% if too_big or binary %}disabled{% endif %}>Сохранить</button>
+    </form>
+  </div>
+</body>
+</html>

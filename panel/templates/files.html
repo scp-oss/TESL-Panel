@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — файлы {{ name }}</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --accent-hover: #4a78d6;
+      --danger: #e5555f; --danger-hover: #c8434c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); }
+    h1 { font-size: 1.3rem; margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 20px; width: 100%; max-width: 640px; margin-bottom: 16px; }
+    .card h2 { margin: 0 0 12px; font-size: 1rem; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--card-border); }
+    th { color: var(--muted); font-weight: 500; }
+    td.path { word-break: break-all; }
+    td.size { white-space: nowrap; color: var(--muted); }
+    td.actions { white-space: nowrap; text-align: right; }
+    td.actions a, td.actions button { margin-left: 8px; font-size: 0.8rem; }
+    button.link { background: none; border: none; color: var(--danger); cursor: pointer;
+      font-size: 0.8rem; padding: 0; text-decoration: underline; }
+    button.link:hover { color: var(--danger-hover); }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+    input[type=text], input[type=file] {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: #0f1115; color: var(--text); font-size: 0.9rem;
+    }
+    button.submit { margin-top: 16px; background: var(--accent); color: #fff; border: none;
+      padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button.submit:hover { background: var(--accent-hover); }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1><a href="/admin/project/{{ name }}">&larr; {{ name }}</a> / Файлы</h1>
+
+  <div class="card">
+    <h2>Файлы ({{ files | length }})</h2>
+    {% if files %}
+      <table>
+        <thead><tr><th>Путь</th><th>Размер</th><th></th></tr></thead>
+        <tbody>
+          {% for f in files %}
+          <tr>
+            <td class="path"><code>{{ f.path }}</code></td>
+            <td class="size">{{ (f.size / 1024) | round(1) }} КБ</td>
+            <td class="actions">
+              <a href="/admin/project/{{ name }}/files/edit?path={{ f.path | urlencode }}">открыть</a>
+              <a href="/api/depot/{{ name }}/{{ f.path }}">скачать</a>
+              <form style="display:inline" method="post"
+                    action="/admin/project/{{ name }}/files/delete"
+                    onsubmit="return confirm('Удалить {{ f.path }}?');">
+                <input type="hidden" name="path" value="{{ f.path }}">
+                <button class="link" type="submit">удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Пока пусто.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Загрузить файл</h2>
+    <form method="post" action="/admin/project/{{ name }}/files/upload" enctype="multipart/form-data">
+      <label for="upload-path">Путь назначения (пусто — берётся имя файла)</label>
+      <input type="text" id="upload-path" name="path" placeholder="poster.png">
+      <label for="upload-file">Файл</label>
+      <input type="file" id="upload-file" name="file" required>
+      <button class="submit" type="submit">Загрузить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Создать текстовый файл</h2>
+    <a href="/admin/project/{{ name }}/files/edit">Открыть редактор с пустым путём &rarr;</a>
+  </div>
+</body>
+</html>
