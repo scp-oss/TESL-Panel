@@ -7,13 +7,20 @@ TESL-Panel — тонкий веб-сервис с двумя ролями:
      Сама сборка (депо/чанки) пока остаётся на WebDAV — см. TESL-Manager's
      CLAUDE.md, эта панель её не подменяет.
 
-  2. /api/depot/<project>/... — приёмник для НОВЫХ публикаций, минуя
+  2. /api/depot/<build_id>/... — приёмник для НОВЫХ публикаций, минуя
      Nextcloud/WebDAV, пишет напрямую на диск сервера (storage.py). Формат
      на диске идентичен тому, что уже на WebDAV (chunks/<xx>/<id>,
      versions/<key>.json, depot.json) — меняется только транспорт.
      Запись требует Bearer-токен (TESL_PANEL_UPLOAD_TOKEN), чтение — нет
      (тот же принцип, что и у read-only nginx-плана в TESL-Manager: чтение
      депо не секрет, запись — да).
+
+  build_id — стабильный UUID из builds_db.py (2026-09-23, прямой запрос
+  пользователя: сборки создаются независимо и в панели, и в менеджере,
+  имя не должно быть ключом связи между ними). Человеко-читаемое ИМЯ
+  сборки остаётся в /admin-URL-ах (/admin/project/<name>/...) для
+  удобства просмотра глазами — эти маршруты сами резолвят имя в build_id
+  через builds_db.get_build_by_name() внутри обработчика.
 """
 import base64
 import json
@@ -24,7 +31,7 @@ from flask import (
     session, url_for,
 )
 
-from . import config, github_releases, projects, self_update, storage
+from . import builds_db, config, github_releases, self_update, storage
 from .storage import UnsafePathError
 
 
@@ -83,27 +90,26 @@ def create_app() -> Flask:
         session.pop("admin", None)
         return redirect(url_for("admin_login"))
 
-    # ── Admin: список сборок, добавление/удаление — без передеплоя/
-    #    рестарта, см. projects.py ────────────────────────────────────────────
+    # ── Admin: список сборок, добавление/удаление/переименование — без
+    #    передеплоя/рестарта, см. builds_db.py ──────────────────────────────
 
     @app.get("/admin")
     @_admin_required
     def admin_page():
-        return render_template("admin.html", projects=projects.list_projects(), error=None)
+        return render_template("admin.html", builds=builds_db.list_builds(), error=None)
 
     @app.post("/admin/add-project")
     @_admin_required
     def admin_add_project():
         name = request.form.get("project", "").strip()
-        if not projects.add_project(name):
-            return render_template(
-                "admin.html", projects=projects.list_projects(),
-                error=f"Недопустимое имя: {name!r} (только буквы/цифры/_/-, до 64 симв.)",
-            ), 400
+        build, err = builds_db.create_build(name)
+        if build is None:
+            return render_template("admin.html", builds=builds_db.list_builds(), error=err), 400
         return redirect(url_for("admin_page"))
 
     # ── Admin: "код настройки" для TESL-Manager (Настройки → одна строка,
-    #    вставляется в клиент вместо URL+токена по отдельности) ────────────────
+    #    вставляется в клиент вместо URL+токена по отдельности) + self-update
+    #    самой панели (см. self_update.py) ───────────────────────────────────
 
     def _generate_setup_code() -> str:
         # base64(JSON) — не секретность ради самого кодирования (тот же
@@ -151,34 +157,63 @@ def create_app() -> Flask:
             update_result={"ok": ok, "message": msg},
         )
 
+    # ── Admin: страница одной сборки (по ИМЕНИ в URL — человеко-читаемо,
+    #    резолвится в build_id внутри обработчика) ──────────────────────────
+
     @app.get("/admin/project/<name>")
     @_admin_required
     def admin_project_detail(name):
-        if not projects.is_allowed(name):
+        build = builds_db.get_build_by_name(name)
+        if build is None:
             abort(404)
         return render_template(
             "project_detail.html",
             name=name,
-            depot_meta=storage.get_depot_meta(name),
-            versions=storage.list_versions(name),
+            build_id=build["id"],
+            depot_meta=storage.get_depot_meta(build["id"]),
+            versions=storage.list_versions(build["id"]),
+            rename_error=None,
         )
+
+    @app.post("/admin/project/<name>/rename")
+    @_admin_required
+    def admin_project_rename(name):
+        build = builds_db.get_build_by_name(name)
+        if build is None:
+            abort(404)
+        new_name = request.form.get("new_name", "").strip()
+        ok, msg = builds_db.rename_build(build["id"], new_name)
+        if not ok:
+            return render_template(
+                "project_detail.html",
+                name=name,
+                build_id=build["id"],
+                depot_meta=storage.get_depot_meta(build["id"]),
+                versions=storage.list_versions(build["id"]),
+                rename_error=msg,
+            ), 400
+        # msg — старое имя при успехе (см. builds_db.rename_build())
+        storage.rename_dir(msg, new_name)
+        return redirect(url_for("admin_project_detail", name=new_name))
 
     @app.post("/admin/project/<name>/delete")
     @_admin_required
     def admin_project_delete(name):
         # Печатать имя сборки заново в форме — самая простая защита от
         # "случайно ткнул кнопку" для необратимого действия (удаляет ВСЕ
-        # чанки/версии проекта с диска) — тот же принцип, что и у
+        # чанки/версии сборки с диска) — тот же принцип, что и у
         # confirmBulkDelete() в z0r-panel (JS там, тут — server-side).
         if request.form.get("confirm", "") != name:
             abort(400, description="имя для подтверждения не совпадает")
-        if projects.is_allowed(name):
-            storage.delete_project_dir(name)
-            projects.remove_project(name)
+        build = builds_db.get_build_by_name(name)
+        if build is not None:
+            deleted = builds_db.delete_build(build["id"])
+            if deleted is not None:
+                storage.delete_dir_by_name(deleted["name"])
         return redirect(url_for("admin_page"))
 
-    # ── Admin: файловый менеджер проекта (список/просмотр/правка/добавление/
-    #    удаление отдельных файлов внутри STORAGE_ROOT/<project>/) — работает
+    # ── Admin: файловый менеджер сборки (список/просмотр/правка/добавление/
+    #    удаление отдельных файлов внутри STORAGE_ROOT/<name>/) — работает
     #    поверх той же storage.py, что и /api/depot, просто с UI и без
     #    Bearer-токена (сессия /admin уже подтверждает то же самое доверие).
     #    "Правка" — только для небольших (см. storage.MAX_INLINE_EDIT_BYTES)
@@ -187,26 +222,30 @@ def create_app() -> Flask:
     #    (они адресуются по хэшу своего же содержимого — руками поправленный
     #    чанк развалит все ссылающиеся на него файлы). ──────────────────────
 
+    def _build_id_by_name_or_404(name: str) -> str:
+        build = builds_db.get_build_by_name(name)
+        if build is None:
+            abort(404)
+        return build["id"]
+
     @app.get("/admin/project/<name>/files")
     @_admin_required
     def admin_files(name):
-        if not projects.is_allowed(name):
-            abort(404)
+        build_id = _build_id_by_name_or_404(name)
         return render_template(
-            "files.html", name=name, files=storage.list_files(name), error=None,
+            "files.html", name=name, files=storage.list_files(build_id), error=None,
         )
 
     @app.get("/admin/project/<name>/files/edit")
     @_admin_required
     def admin_file_edit(name):
-        if not projects.is_allowed(name):
-            abort(404)
+        build_id = _build_id_by_name_or_404(name)
         rel_path = request.args.get("path", "").strip()
         content = ""
         too_big = False
         binary = False
         if rel_path:
-            data = storage.get_bytes(name, rel_path)
+            data = storage.get_bytes(build_id, rel_path)
             if data is not None:
                 if len(data) > storage.MAX_INLINE_EDIT_BYTES:
                     too_big = True
@@ -223,14 +262,13 @@ def create_app() -> Flask:
     @app.post("/admin/project/<name>/files/edit")
     @_admin_required
     def admin_file_edit_post(name):
-        if not projects.is_allowed(name):
-            abort(404)
+        build_id = _build_id_by_name_or_404(name)
         rel_path = request.form.get("path", "").strip()
         content  = request.form.get("content", "")
         if not rel_path:
             abort(400, description="путь не указан")
         try:
-            storage.put_bytes(name, rel_path, content.encode("utf-8"))
+            storage.put_bytes(build_id, rel_path, content.encode("utf-8"))
         except UnsafePathError:
             abort(400, description="некорректный путь")
         return redirect(url_for("admin_files", name=name))
@@ -238,14 +276,13 @@ def create_app() -> Flask:
     @app.post("/admin/project/<name>/files/upload")
     @_admin_required
     def admin_file_upload(name):
-        if not projects.is_allowed(name):
-            abort(404)
+        build_id = _build_id_by_name_or_404(name)
         f = request.files.get("file")
         rel_path = request.form.get("path", "").strip() or (f.filename if f else "")
         if not f or not rel_path:
             abort(400, description="нужны и файл, и путь назначения")
         try:
-            storage.put_bytes(name, rel_path, f.read())
+            storage.put_bytes(build_id, rel_path, f.read())
         except UnsafePathError:
             abort(400, description="некорректный путь")
         return redirect(url_for("admin_files", name=name))
@@ -253,54 +290,18 @@ def create_app() -> Flask:
     @app.post("/admin/project/<name>/files/delete")
     @_admin_required
     def admin_file_delete(name):
-        if not projects.is_allowed(name):
-            abort(404)
+        build_id = _build_id_by_name_or_404(name)
         rel_path = request.form.get("path", "").strip()
         try:
-            storage.delete_file(name, rel_path)
+            storage.delete_file(build_id, rel_path)
         except UnsafePathError:
             abort(400, description="некорректный путь")
         return redirect(url_for("admin_files", name=name))
 
-    # ── Projects API (JSON, Bearer — для десктоп-GUI TESL-Manager, см. его
-    #    depot_tab.py: серверный список проектов вместо ручного ввода
-    #    имени + возможность создать новый прямо из GUI, тем же токеном,
-    #    что уже используется для публикации чанков) ──────────────────────────
-
-    @app.get("/api/projects")
-    def api_list_projects():
-        # Публичное чтение — список имён проектов не секрет (тот же
-        # принцип, что у GET/HEAD depot_object ниже).
-        return jsonify({"projects": projects.list_projects()})
-
-    @app.post("/api/projects")
-    def api_add_project():
-        _require_upload_token()
-        data = request.get_json(silent=True) or {}
-        name = (data.get("name") or request.form.get("name") or "").strip()
-        if not projects.add_project(name):
-            abort(400, description=f"недопустимое имя проекта: {name!r} (только буквы/цифры/_/-, до 64 симв.)")
-        return jsonify({"status": "ok", "project": name}), 201
-
-    # ── Файлы проекта — JSON-листинг для десктоп-GUI (Bearer, тот же
-    #    уровень доверия, что у /admin/project/<name>/files, только без
-    #    cookie-сессии — сам просмотр/правка/загрузка байт файла уже
-    #    покрыты обычным GET/PUT/DELETE на depot_object ниже). ────────────────
-
-    @app.get("/api/depot/<project>/files")
-    def api_depot_files(project):
-        _check_project(project)
-        _require_upload_token()
-        try:
-            return jsonify({"files": storage.list_files(project)})
-        except UnsafePathError:
-            abort(400)
-
-    # ── Depot API ────────────────────────────────────────────────────────────
-
-    def _check_project(project: str):
-        if not projects.is_allowed(project):
-            abort(404, description=f"неизвестный project: {project}")
+    # ── Builds API (JSON, для десктоп-GUI TESL-Manager, см. его depot_tab.py:
+    #    серверный список/создание/удаление/переименование сборок вместо
+    #    ручного управления, тем же Bearer-токеном, что уже используется для
+    #    публикации чанков). id — реальный ключ, не имя. ─────────────────────
 
     def _require_upload_token():
         if not config.UPLOAD_TOKEN:
@@ -311,37 +312,92 @@ def create_app() -> Flask:
         if not auth.startswith("Bearer ") or not _token_valid(auth[len("Bearer "):]):
             abort(401, description="неверный или отсутствующий Bearer-токен")
 
-    @app.get("/api/depot/<project>/test")
-    def depot_test(project):
-        _check_project(project)
-        return jsonify({"status": "ok", "project": project})
+    @app.get("/api/builds")
+    def api_list_builds():
+        # Публичное чтение — список сборок не секрет (тот же принцип,
+        # что у GET/HEAD depot_object ниже).
+        return jsonify({"builds": builds_db.list_builds()})
 
-    @app.get("/api/depot/<project>/chunks")
-    def depot_list_chunks(project):
-        _check_project(project)
+    @app.post("/api/builds")
+    def api_create_build():
+        _require_upload_token()
+        data = request.get_json(silent=True) or {}
+        name = (data.get("name") or request.form.get("name") or "").strip()
+        build, err = builds_db.create_build(name)
+        if build is None:
+            abort(400, description=err)
+        return jsonify(build), 201
+
+    @app.delete("/api/builds/<build_id>")
+    def api_delete_build(build_id):
+        _require_upload_token()
+        deleted = builds_db.delete_build(build_id)
+        if deleted is not None:
+            storage.delete_dir_by_name(deleted["name"])
+        return jsonify({"status": "ok", "existed": deleted is not None})
+
+    @app.patch("/api/builds/<build_id>")
+    def api_rename_build(build_id):
+        _require_upload_token()
+        data = request.get_json(silent=True) or {}
+        new_name = (data.get("name") or request.form.get("name") or "").strip()
+        ok, msg = builds_db.rename_build(build_id, new_name)
+        if not ok:
+            abort(400, description=msg)
+        storage.rename_dir(msg, new_name)  # msg — старое имя при успехе
+        return jsonify({"status": "ok", "id": build_id, "name": new_name})
+
+    # ── Файлы сборки — JSON-листинг для десктоп-GUI (Bearer, тот же
+    #    уровень доверия, что у /admin/project/<name>/files, только без
+    #    cookie-сессии — сам просмотр/правка/загрузка байт файла уже
+    #    покрыты обычным GET/PUT/DELETE на depot_object ниже). ────────────────
+
+    @app.get("/api/depot/<build_id>/files")
+    def api_depot_files(build_id):
+        _check_build(build_id)
+        _require_upload_token()
         try:
-            return jsonify({"chunk_ids": storage.list_chunk_ids(project)})
+            return jsonify({"files": storage.list_files(build_id)})
         except UnsafePathError:
             abort(400)
 
-    @app.route("/api/depot/<project>/<path:rel_path>", methods=["GET", "HEAD", "PUT", "DELETE"])
-    def depot_object(project, rel_path):
-        _check_project(project)
+    # ── Depot API ────────────────────────────────────────────────────────────
+
+    def _check_build(build_id: str):
+        if not builds_db.is_allowed(build_id):
+            abort(404, description=f"неизвестная сборка: {build_id}")
+
+    @app.get("/api/depot/<build_id>/test")
+    def depot_test(build_id):
+        _check_build(build_id)
+        return jsonify({"status": "ok", "build_id": build_id})
+
+    @app.get("/api/depot/<build_id>/chunks")
+    def depot_list_chunks(build_id):
+        _check_build(build_id)
+        try:
+            return jsonify({"chunk_ids": storage.list_chunk_ids(build_id)})
+        except UnsafePathError:
+            abort(400)
+
+    @app.route("/api/depot/<build_id>/<path:rel_path>", methods=["GET", "HEAD", "PUT", "DELETE"])
+    def depot_object(build_id, rel_path):
+        _check_build(build_id)
         try:
             if request.method == "DELETE":
                 # Тот же Bearer-токен, что и PUT — используется десктоп-GUI
-                # (см. TESL-Manager/depot_sync_manager/server_files_panel_tab.py)
+                # (см. TESL-Manager/depot_sync_manager/depot_files_tab.py)
                 # для удаления уже опубликованного файла из отдельной
                 # вкладки "Файлы на сервере", тем же смыслом, что и
                 # /admin/project/<name>/files/delete, только без cookie-сессии.
                 _require_upload_token()
-                existed = storage.delete_file(project, rel_path)
+                existed = storage.delete_file(build_id, rel_path)
                 return jsonify({"status": "ok", "existed": existed})
 
             if request.method == "PUT":
                 _require_upload_token()
                 data = request.get_data(cache=False)
-                storage.put_bytes(project, rel_path, data)
+                storage.put_bytes(build_id, rel_path, data)
                 return jsonify({"status": "ok", "bytes": len(data)}), 201
 
             # GET/HEAD — публичное чтение, токен не нужен. send_file(...,
@@ -355,7 +411,7 @@ def create_app() -> Flask:
             # читает файл через seek()/частичное чтение, не грузит его в
             # память целиком ни на PUT-время (уже было потоково), ни
             # здесь на чтение.
-            path = storage.safe_path(project, rel_path)
+            path = storage.safe_path(build_id, rel_path)
             if not path.is_file():
                 abort(404)
             return send_file(

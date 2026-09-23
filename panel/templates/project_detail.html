@@ -32,6 +32,27 @@
   <h1><a href="/admin">&larr; Сборки</a> / {{ name }}</h1>
 
   <div class="card">
+    <h2>Сборка</h2>
+    <dl>
+      <dt>id</dt><dd><code>{{ build_id }}</code></dd>
+      <dt>Имя</dt><dd>{{ name }}</dd>
+    </dl>
+    <p style="color: var(--muted); font-size: 0.85rem; margin-top: 10px;">
+      Имя используется как папка на диске — переименование физически
+      переносит уже опубликованные файлы, <code>id</code> при этом не
+      меняется (ссылка на TESL-Manager не сбивается).
+    </p>
+    <form method="post" action="/admin/project/{{ name }}/rename" style="display:flex; gap:8px;">
+      <input class="confirm" type="text" name="new_name" placeholder="новое имя" required
+             pattern="[A-Za-z0-9_-]{1,64}" style="flex:1; margin:0;">
+      <button class="danger-btn" style="background: var(--accent);" type="submit">Переименовать</button>
+    </form>
+    {% if rename_error %}
+      <p style="color: var(--danger); font-size: 0.85rem; margin-top: 8px;">{{ rename_error }}</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>depot.json</h2>
     {% if depot_meta %}
       {% for channel, info in depot_meta.get('channels', {}).items() %}

@@ -92,11 +92,14 @@
   </div>
 
   <div class="card">
-    <h2>Текущие project'ы</h2>
-    {% if projects %}
+    <h2>Текущие сборки</h2>
+    {% if builds %}
       <ul>
-        {% for p in projects %}
-          <li><a href="/admin/project/{{ p }}"><code>{{ p }}</code></a></li>
+        {% for b in builds %}
+          <li>
+            <a href="/admin/project/{{ b.name }}"><code>{{ b.name }}</code></a>
+            <span style="color: var(--muted); font-size: 0.78rem;" title="{{ b.id }}">{{ b.id[:8] }}</span>
+          </li>
         {% endfor %}
       </ul>
     {% else %}
