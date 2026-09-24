@@ -137,6 +137,15 @@
     <textarea id="setup-code" readonly onclick="this.select()">{{ setup_code }}</textarea>
     <button onclick="copyCode()">📋 Скопировать</button>
     <span class="copied" id="copied-msg" style="display:none;">Скопировано!</span>
+    {% if upload_domain %}
+      <p class="muted-line">
+        📤 Код указывает на <code>{{ upload_domain }}</code> — отдельный
+        адрес в обход Cloudflare Proxied, настроен для быстрой публикации
+        (см. <code>TESL_PANEL_UPLOAD_DOMAIN</code>). Вход в саму админку
+        (<code>/admin</code>) по-прежнему идёт через основной домен за
+        Cloudflare — на код настройки это не влияет.
+      </p>
+    {% endif %}
   </div>
 
   <div class="card">

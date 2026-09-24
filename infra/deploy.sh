@@ -53,6 +53,24 @@
 #   git pull && sudo ./infra/deploy.sh
 # Явно передавать их всё ещё можно (например, чтобы СМЕНИТЬ домен/путь
 # хранилища) — флаг всегда имеет приоритет над тем, что уже в panel.env.
+#
+# --upload-domain — НЕОБЯЗАТЕЛЬНЫЙ отдельный поддомен только под
+# публикацию, в обход Cloudflare Proxied (см. живой инцидент 2026-09-24,
+# nginx-tesl-panel-upload.conf.template — Cloudflare Free/Pro душит
+# крупные аплоады в 40-70 раз против прямого пути). ПЕРЕД первым запуском
+# с этим флагом: создай A/AAAA-запись на этот сервер в Cloudflare со
+# статусом "DNS only" (СЕРОЕ облако, НЕ Proxied) — иначе certbot не
+# сможет пройти HTTP-01 проверку (запрос уйдёт на Cloudflare, не сюда).
+# Реального Cloudflare Origin Certificate для этого домена НЕ нужно —
+# скрипт сам выпускает настоящий Let's Encrypt сертификат через
+# `certbot certonly --webroot` (без --nginx-плагина, чтобы не трогать
+# другие server{}-блоки на сервере). --letsencrypt-email — опционально,
+# контактный email для certbot (без него сертификат всё равно выпустится,
+# просто без уведомлений об истечении срока):
+#   sudo ./infra/deploy.sh --upload-domain upload.panel.example.com \
+#       --letsencrypt-email you@example.com
+# (можно передать одновременно с первым запуском выше, или отдельным
+# повторным запуском позже — идемпотентно в обоих случаях).
 
 set -euo pipefail
 
@@ -64,16 +82,25 @@ UPLOAD_TOKEN=""
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CERT_PATH=""
 KEY_PATH=""
+# Отдельный поддомен ТОЛЬКО для публикации, в обход Cloudflare Proxied —
+# см. nginx-tesl-panel-upload.conf.template за полную картину живого
+# инцидента. Необязательный — пустая строка означает "не настроено",
+# ничего в поведении по умолчанию не меняется.
+UPLOAD_DOMAIN=""
+CERTBOT_WEBROOT="/var/www/certbot-webroot"
+LETSENCRYPT_EMAIL=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --domain)        DOMAIN="$2"; shift 2 ;;
-        --storage-root)  STORAGE_ROOT="$2"; shift 2 ;;
-        --port)          PORT="$2"; shift 2 ;;
-        --service-user)  SERVICE_USER="$2"; shift 2 ;;
-        --upload-token)  UPLOAD_TOKEN="$2"; shift 2 ;;
-        --cert)          CERT_PATH="$2"; shift 2 ;;
-        --key)           KEY_PATH="$2"; shift 2 ;;
+        --domain)         DOMAIN="$2"; shift 2 ;;
+        --storage-root)   STORAGE_ROOT="$2"; shift 2 ;;
+        --port)           PORT="$2"; shift 2 ;;
+        --service-user)   SERVICE_USER="$2"; shift 2 ;;
+        --upload-token)   UPLOAD_TOKEN="$2"; shift 2 ;;
+        --cert)           CERT_PATH="$2"; shift 2 ;;
+        --key)            KEY_PATH="$2"; shift 2 ;;
+        --upload-domain)  UPLOAD_DOMAIN="$2"; shift 2 ;;
+        --letsencrypt-email) LETSENCRYPT_EMAIL="$2"; shift 2 ;;
         *) echo "Неизвестный аргумент: $1" >&2; exit 1 ;;
     esac
 done
@@ -103,6 +130,10 @@ if [[ -f "$_EARLY_ENV_FILE" ]]; then
     if [[ -z "$STORAGE_ROOT" ]]; then
         STORAGE_ROOT="$(grep -oP '(?<=^TESL_PANEL_STORAGE_ROOT=).*' "$_EARLY_ENV_FILE" || true)"
         [[ -n "$STORAGE_ROOT" ]] && echo "-> --storage-root не передан, беру из panel.env: $STORAGE_ROOT"
+    fi
+    if [[ -z "$UPLOAD_DOMAIN" ]]; then
+        UPLOAD_DOMAIN="$(grep -oP '(?<=^TESL_PANEL_UPLOAD_DOMAIN=).*' "$_EARLY_ENV_FILE" || true)"
+        [[ -n "$UPLOAD_DOMAIN" ]] && echo "-> --upload-domain не передан, беру из panel.env: $UPLOAD_DOMAIN"
     fi
 fi
 if [[ -z "$DOMAIN" || -z "$STORAGE_ROOT" ]]; then
@@ -175,6 +206,7 @@ TESL_PANEL_STORAGE_ROOT=$STORAGE_ROOT
 TESL_PANEL_UPLOAD_TOKEN=$UPLOAD_TOKEN
 TESL_PANEL_SECRET_KEY=$SECRET_KEY
 TESL_PANEL_DOMAIN=$DOMAIN
+TESL_PANEL_UPLOAD_DOMAIN=$UPLOAD_DOMAIN
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -236,6 +268,78 @@ ln -sf "$NGINX_CONF" "/etc/nginx/sites-enabled/$DOMAIN.conf"
 nginx -t
 systemctl reload nginx
 
+# ── Отдельный поддомен под загрузку, в обход Cloudflare Proxied
+#    (необязательно — см. nginx-tesl-panel-upload.conf.template за
+#    полную картину живого инцидента, почему это вообще нужно) ──────────
+if [[ -n "$UPLOAD_DOMAIN" ]]; then
+    echo
+    echo "== Настройка upload-домена: $UPLOAD_DOMAIN =="
+    mkdir -p "$CERTBOT_WEBROOT"
+    UPLOAD_CERT_LIVE_DIR="/etc/letsencrypt/live/$UPLOAD_DOMAIN"
+    UPLOAD_NGINX_CONF="$PROJECT_DIR/nginx/$UPLOAD_DOMAIN.conf"
+
+    if [[ ! -f "$UPLOAD_CERT_LIVE_DIR/fullchain.pem" ]]; then
+        if ! command -v certbot >/dev/null 2>&1; then
+            echo "❌ certbot не установлен (apt install certbot) — поставь и запусти deploy.sh ещё раз с --upload-domain $UPLOAD_DOMAIN" >&2
+            exit 1
+        fi
+        echo "-> сертификата для $UPLOAD_DOMAIN ещё нет, выпускаю через certbot (webroot)"
+        echo "   ПРЕДПОЛАГАЕТСЯ: A/AAAA-запись $UPLOAD_DOMAIN в Cloudflare уже создана"
+        echo "   и стоит на DNS-only (СЕРОЕ облако, не Proxied) — иначе HTTP-01"
+        echo "   проверка certbot не пройдёт (запрос уйдёт на Cloudflare, не сюда)."
+        # Фаза 1: только порт 80 с acme-challenge — 443-блок из полного
+        # шаблона ниже требует уже СУЩЕСТВУЮЩИЙ файл сертификата, до
+        # выпуска его ещё нет, поэтому сначала временный минимальный конфиг.
+        cat > "$UPLOAD_NGINX_CONF" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $UPLOAD_DOMAIN;
+    location /.well-known/acme-challenge/ {
+        root $CERTBOT_WEBROOT;
+    }
+    location / {
+        return 404;
+    }
+}
+EOF
+        ln -sf "$UPLOAD_NGINX_CONF" "/etc/nginx/sites-enabled/$UPLOAD_DOMAIN.conf"
+        nginx -t
+        systemctl reload nginx
+
+        CERTBOT_EMAIL_ARGS=(--register-unsafely-without-email)
+        if [[ -n "$LETSENCRYPT_EMAIL" ]]; then
+            CERTBOT_EMAIL_ARGS=(-m "$LETSENCRYPT_EMAIL")
+        else
+            echo "⚠️  --letsencrypt-email не передан — сертификат будет выпущен без"
+            echo "    контактного email (уведомления об истечении срока приходить не будут;"
+            echo "    certbot's systemd-таймер продлевает сам, но стоит знать про это заранее)."
+        fi
+        # --nginx-плагин НЕ используется намеренно — certonly + webroot не
+        # трогает никакие другие server{}-блоки на этом сервере (см.
+        # шаблон nginx-tesl-panel-upload.conf.template за причину).
+        certbot certonly --webroot -w "$CERTBOT_WEBROOT" -d "$UPLOAD_DOMAIN" \
+            --non-interactive --agree-tos "${CERTBOT_EMAIL_ARGS[@]}" \
+            || {
+                echo "❌ certbot не смог выпустить сертификат для $UPLOAD_DOMAIN —" >&2
+                echo "   проверь, что DNS-запись (A/AAAA, DNS-only) уже указывает на этот сервер" >&2
+                echo "   и реально резолвится извне (dig +short $UPLOAD_DOMAIN)." >&2
+                exit 1
+            }
+        echo "-> сертификат для $UPLOAD_DOMAIN выпущен"
+    fi
+
+    sed \
+        -e "s#__UPLOAD_DOMAIN__#$UPLOAD_DOMAIN#g" \
+        -e "s#__PORT__#$PORT#g" \
+        -e "s#__CERTBOT_WEBROOT__#$CERTBOT_WEBROOT#g" \
+        "$PROJECT_DIR/infra/nginx-tesl-panel-upload.conf.template" > "$UPLOAD_NGINX_CONF"
+    ln -sf "$UPLOAD_NGINX_CONF" "/etc/nginx/sites-enabled/$UPLOAD_DOMAIN.conf"
+    nginx -t
+    systemctl reload nginx
+    echo "-> upload-домен настроен: https://$UPLOAD_DOMAIN"
+fi
+
 echo
 echo "== Готово =="
 echo "Проверить: curl -I https://$DOMAIN/health"
@@ -247,3 +351,11 @@ echo "  $UPLOAD_TOKEN"
 echo
 echo "Вход в /admin одной ссылкой (см. /admin/login?token=... в CLAUDE.md):"
 echo "  https://$DOMAIN/admin/login?token=$UPLOAD_TOKEN"
+if [[ -n "$UPLOAD_DOMAIN" ]]; then
+    echo
+    echo "Upload-домен (в обход Cloudflare, для быстрой публикации): https://$UPLOAD_DOMAIN"
+    echo "Проверить: curl -I https://$UPLOAD_DOMAIN/health"
+    echo "\"Код настройки\" на /admin/settings теперь указывает на этот домен —"
+    echo "если у TESL-Manager уже вставлен старый код (с основным доменом),"
+    echo "вставь свежий код настройки ещё раз, чтобы публикация пошла через него."
+fi

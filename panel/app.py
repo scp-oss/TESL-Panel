@@ -143,7 +143,15 @@ def create_app() -> Flask:
         # несколько полей (url + token, при необходимости — другие в
         # будущем) и клиент мог надёжно распарсить её одним action'ом
         # "Подключить по коду" вместо трёх отдельных полей ввода.
-        base_url = config.PUBLIC_BASE_URL or request.url_root.rstrip("/")
+        #
+        # UPLOAD_BASE_URL, не PUBLIC_BASE_URL — живой инцидент 2026-09-24
+        # (см. config.py за полную картину): TESL-Manager публикует через
+        # ЭТОТ url, а Cloudflare Proxied душит крупные аплоады в 40-70 раз
+        # против прямого пути. Если TESL_PANEL_UPLOAD_DOMAIN настроен —
+        # код настройки указывает на него, а не на защищённый Cloudflare
+        # домен админки; если не настроен — UPLOAD_BASE_URL просто равен
+        # PUBLIC_BASE_URL, поведение не меняется.
+        base_url = config.UPLOAD_BASE_URL or request.url_root.rstrip("/")
         payload = {"v": 1, "base_url": base_url, "token": config.UPLOAD_TOKEN}
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return base64.b64encode(raw).decode("ascii")
@@ -155,6 +163,7 @@ def create_app() -> Flask:
             "settings.html",
             setup_code=_generate_setup_code(),
             has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
             update_info=None,
             update_result=None,
         )
@@ -166,6 +175,7 @@ def create_app() -> Flask:
             "settings.html",
             setup_code=_generate_setup_code(),
             has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
             update_info=self_update.check_for_updates(),
             update_result=None,
         )
@@ -178,6 +188,7 @@ def create_app() -> Flask:
             "settings.html",
             setup_code=_generate_setup_code(),
             has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
             update_info=None,
             update_result={"ok": ok, "message": msg},
         )

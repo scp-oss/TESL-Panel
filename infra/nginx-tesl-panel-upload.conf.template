@@ -1,0 +1,83 @@
+# Плейсхолдеры (__X__) заполняются infra/deploy.sh — не редактировать
+# руками, не коммитить с реальными значениями (см. CLAUDE.md).
+#
+# Живой инцидент (2026-09-24): реальная публикация через основной домен
+# (Cloudflare Proxied, см. nginx-tesl-panel.conf.template) шла ~1.5MB/s
+# независимо от диска/сети/nginx-конфига/нагрузки сервера — все эти
+# причины проверены и исключены по отдельности. Решающий тест: тот же
+# curl PUT в обход Cloudflare (--resolve на реальный IP) — 66-98 MB/s, в
+# 40-70 раз быстрее. У Cloudflare Free/Pro нет гарантированной пропускной
+# способности для крупных файловых аплоадов через прокси — это известное
+# ограничение тарифа (Enterprise+Argo даёт приоритетную маршрутизацию,
+# здесь её нет), не баг конкретно этого деплоя.
+#
+# Этот файл — ОТДЕЛЬНЫЙ поддомен ТОЛЬКО для загрузки (TESL-Manager),
+# сознательно НЕ проксируемый Cloudflare (DNS-only/серое облако в
+# дэшборде Cloudflare — оператор настраивает это САМ, скрипт этого не
+# делает и не может: ни DNS, ни зоной Cloudflare отсюда не управляем).
+# Тот же backend (gunicorn на том же __PORT__), что и основной домен —
+# просто прямой путь до него, в обход edge Cloudflare. Административная
+# часть (/admin) осознанно ОСТАЁТСЯ на основном домене за Cloudflare —
+# сюда переезжает только высоконагруженный по трафику путь публикации.
+#
+# TLS — НАСТОЯЩИЙ Let's Encrypt сертификат (certbot), НЕ Cloudflare Origin
+# Certificate: раз этот домен не проксируется Cloudflare, клиенты
+# (TESL-Manager, curl) подключаются напрямую и ожидают сертификат,
+# которому доверяет обычный TLS-стек — Origin Certificate вне
+# инфраструктуры самой Cloudflare недействителен ни для кого другого.
+# Выпускается через `certbot certonly --webroot` (НЕ `--nginx`-плагин —
+# тот трогает произвольные server{}-блоки без разбора, см. CLAUDE.md
+# "TLS — Cloudflare Origin Certificate, НЕ certbot" за живой инцидент,
+# из-за которого этот проект вообще избегает `--nginx`-плагина certbot
+# на этом сервере) — deploy.sh делает это сам при первом запуске с
+# --upload-domain, в два прохода (сперва только порт 80 с acme-challenge,
+# затем полный конфиг ниже, после того как сертификат реально выпущен).
+# Location acme-challenge остаётся в порту 80 НАВСЕГДА (не только на
+# первый выпуск) — certbot's systemd-таймер продлевает сертификат тем же
+# webroot-методом автоматически, без участия этого скрипта.
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name __UPLOAD_DOMAIN__;
+
+    ssl_certificate     /etc/letsencrypt/live/__UPLOAD_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__UPLOAD_DOMAIN__/privkey.pem;
+
+    # Те же значения, что и у основного домена (nginx-tesl-panel.conf.
+    # template) — тот же backend, та же природа трафика (pack-файлы).
+    client_max_body_size 200m;
+    client_body_timeout   300s;
+    proxy_read_timeout    300s;
+    proxy_send_timeout    300s;
+
+    location / {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # Тот же смысл, что у основного домена — см. его собственный
+        # комментарий за полное обоснование (двойная буферизация тела
+        # запроса через диск nginx). Здесь это уже не единственный фикс
+        # (сам этот поддомен и есть главный фикс — обход Cloudflare), но
+        # нет причины оставлять буферизацию включённой раз мы её уже
+        # знаем как источник лишнего I/O.
+        proxy_request_buffering off;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __UPLOAD_DOMAIN__;
+
+    location /.well-known/acme-challenge/ {
+        root __CERTBOT_WEBROOT__;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

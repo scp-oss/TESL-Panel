@@ -73,3 +73,31 @@ elif _DOMAIN_ENV:
     PUBLIC_BASE_URL = f"https://{_DOMAIN_ENV}"
 else:
     PUBLIC_BASE_URL = ""
+
+# Живой инцидент (2026-09-24): реальная публикация через Cloudflare Proxied
+# (PUBLIC_BASE_URL выше) шла ~1.5MB/s независимо от размера пака/диска/
+# сети/нагрузки сервера — все эти причины проверены и исключены по
+# отдельности (см. TESL-Manager's CLAUDE.md за полную цепочку
+# диагностики). Решающий тест: тот же curl PUT в обход Cloudflare
+# (--resolve на реальный IP сервера) — 66-98 MB/s, в 40-70 раз быстрее.
+# У Cloudflare Free/Pro нет гарантированной пропускной способности для
+# крупных файловых аплоадов через прокси (это её известное ограничение,
+# не баг конкретно этого деплоя) — Enterprise с Argo даёт приоритетную
+# маршрутизацию, здесь её нет.
+#
+# TESL_PANEL_UPLOAD_DOMAIN — отдельный поддомен ТОЛЬКО для загрузки
+# (например upload.tesl-panel.example.com), сознательно НЕ проксируемый
+# Cloudflare (DNS-only/серое облако) — тот же сервер, тот же backend
+# (gunicorn на том же порту), просто без прохождения через edge Cloudflare
+# для этого одного пути. Административная часть (/admin, PUBLIC_BASE_URL)
+# осознанно ОСТАЁТСЯ за Cloudflare — только высоконагруженный по трафику
+# путь публикации переезжает на прямой домен, не вся панель целиком.
+# _generate_setup_code() (app.py) использует UPLOAD_BASE_URL, а не
+# PUBLIC_BASE_URL — код настройки, который получает TESL-Manager,
+# автоматически указывает на быстрый путь, если он настроен; ссылка на
+# /admin/login по-прежнему через PUBLIC_BASE_URL (человек, не клиент
+# заливки). Если UPLOAD_DOMAIN не задан — UPLOAD_BASE_URL просто равен
+# PUBLIC_BASE_URL, поведение не меняется у тех, кто это не настраивал.
+_UPLOAD_DOMAIN_ENV = os.environ.get("TESL_PANEL_UPLOAD_DOMAIN", "").strip()
+UPLOAD_DOMAIN = _UPLOAD_DOMAIN_ENV
+UPLOAD_BASE_URL = f"https://{_UPLOAD_DOMAIN_ENV}" if _UPLOAD_DOMAIN_ENV else PUBLIC_BASE_URL
