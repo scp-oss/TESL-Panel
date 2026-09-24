@@ -154,10 +154,13 @@
 
     {% if token_result %}
       {% if token_result.ok %}
-        <div class="ok">
-          ✅ {{ token_result.message }}<br>
-          Новый токен: <code>{{ token_result.new_token }}</code>
+        <div class="ok" id="token-ok-box">
+          ✅ Новый токен: <code>{{ token_result.new_token }}</code><br>
+          {{ token_result.message }}<br>
+          Поле «Код настройки» выше пока ещё со СТАРЫМ токеном — страница
+          обновится сама через несколько секунд.
         </div>
+        <script>setTimeout(function () { location.reload(); }, 4000);</script>
       {% else %}
         <div class="err">❌ {{ token_result.message }}</div>
       {% endif %}
