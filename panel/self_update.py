@@ -40,6 +40,20 @@ SERVICE_NAME  = "tesl-panel.service"
 
 
 def _run(args, timeout: int) -> subprocess.CompletedProcess:
+    # Живой инцидент (2026-09-24): чекаут репозитория (deploy.sh) остаётся
+    # во владении того, кто его склонировал (обычно root), а эти git-вызовы
+    # выполняются от имени НЕпривилегированного сервисного пользователя
+    # (tesl-panel) — несовпадение владельца упирается в защиту git от
+    # dubious ownership (пост-CVE-2022-24765): "fatal: detected dubious
+    # ownership in repository". Та же болезнь, что уже была найдена и
+    # исправлена в z2r_autobench's z0r (`_check_git_updates()`/
+    # `_git_short_commit()`, см. её CLAUDE.md) для checkout'ов, у которых
+    # владелец расходится с euid читающего процесса — тот же фикс: `-c
+    # safe.directory=<repo>`, ограниченный ЭТИМ конкретным вызовом, а не
+    # `--global` (никакого расширения доверия к другим репозиториям на
+    # сервере). git сам принимает `-c` до подкоманды, так что args[0]
+    # ("git") остаётся первым, опция вставляется сразу после него.
+    args = [args[0], "-c", f"safe.directory={REPO_DIR}", *args[1:]]
     return subprocess.run(
         args, cwd=str(REPO_DIR), capture_output=True, text=True, timeout=timeout,
     )
