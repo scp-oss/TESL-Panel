@@ -6,6 +6,19 @@ After=network.target
 Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__PROJECT_DIR__
+# Живой инцидент (2026-09-24): journalctl показывал на каждом старте
+# "[ERROR] Control server error: [Errno 13] Permission denied:
+# '/home/__SERVICE_USER__'" — не фатально (воркеры всё равно
+# поднимались, сервис отвечал), но шумело в логе на каждый рестарт.
+# Причина: `useradd --system --no-create-home` (см. deploy.sh) даёт
+# юзеру запись HOME=/home/__SERVICE_USER__ в /etc/passwd, даже когда
+# сама директория никогда не создавалась — systemd подставляет этот
+# $HOME процессу как есть, а сам каталог /home пользователю не
+# принадлежит и недоступен на запись, так что что бы ни пыталось
+# создать там файл (control-сокет/кэш gunicorn) — падает с Permission
+# denied. /tmp всегда доступен на запись любому пользователю (sticky
+# bit) — простой, стандартный фикс для этого класса "юзер без home".
+Environment=HOME=/tmp
 EnvironmentFile=__PROJECT_DIR__/panel.env
 ExecStart=__PROJECT_DIR__/.venv/bin/gunicorn --workers 2 --bind 127.0.0.1:__PORT__ --timeout 300 wsgi:app
 Restart=on-failure

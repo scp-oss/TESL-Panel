@@ -29,7 +29,7 @@
 # генерирует upload-токен и печатает его в конце, СОХРАНИ его, он нужен
 # для настройки TESL-Manager):
 #   sudo ./infra/deploy.sh --domain panel.example.com \
-#       --storage-root /mnt/1tb-1 --projects TESVAE
+#       --storage-root /mnt/1tb-1
 #
 # Повторный запуск (обновление кода/конфига) — идемпотентен, токен/секрет
 # сессии сохраняются (перечитываются из уже существующего panel.env, не
@@ -43,7 +43,6 @@ set -euo pipefail
 
 DOMAIN=""
 STORAGE_ROOT=""
-PROJECTS="TESVAE"
 PORT="8090"
 SERVICE_USER="tesl-panel"
 UPLOAD_TOKEN=""
@@ -55,7 +54,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --domain)        DOMAIN="$2"; shift 2 ;;
         --storage-root)  STORAGE_ROOT="$2"; shift 2 ;;
-        --projects)      PROJECTS="$2"; shift 2 ;;
         --port)          PORT="$2"; shift 2 ;;
         --service-user)  SERVICE_USER="$2"; shift 2 ;;
         --upload-token)  UPLOAD_TOKEN="$2"; shift 2 ;;
@@ -111,7 +109,6 @@ echo "== TESL-Panel deploy =="
 echo "  Каталог проекта: $PROJECT_DIR"
 echo "  Домен:            $DOMAIN"
 echo "  Storage root:     $STORAGE_ROOT"
-echo "  Проекты:          $PROJECTS"
 echo "  Порт (локальный): $PORT"
 
 # ── Сервисный пользователь (идемпотентно, тот же принцип, что
@@ -162,7 +159,6 @@ cat > "$ENV_FILE" <<EOF
 TESL_PANEL_STORAGE_ROOT=$STORAGE_ROOT
 TESL_PANEL_UPLOAD_TOKEN=$UPLOAD_TOKEN
 TESL_PANEL_SECRET_KEY=$SECRET_KEY
-TESL_PANEL_PROJECTS=$PROJECTS
 TESL_PANEL_DOMAIN=$DOMAIN
 EOF
 chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"

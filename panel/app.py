@@ -55,6 +55,14 @@ def create_app() -> Flask:
     def health():
         return jsonify({"status": "ok"})
 
+    # Публично, как и /health — версия/коммит панели не секрет (тот же
+    # принцип, что у GET-чтения депо ниже), клиенту (TESL-Manager) нужно
+    # знать это ДО того, как он вообще авторизован токеном записи —
+    # прямой запрос пользователя, см. self_update.get_local_commit().
+    @app.get("/api/server-info")
+    def api_server_info():
+        return jsonify({"commit": self_update.get_local_commit()})
+
     # ── Admin: логин по UPLOAD_TOKEN (тот же токен, что и у /api/depot/*
     #    записи — см. config.py, зачем не два разных секрета), дальше
     #    сессия по подписанной cookie (SECRET_KEY) — управление сборками

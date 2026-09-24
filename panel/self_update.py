@@ -49,6 +49,25 @@ def _short(commit_hash: str) -> str:
     return commit_hash.strip()[:7]
 
 
+def get_local_commit() -> str:
+    """Короткий хэш текущего коммита панели — дёшево (только `git
+    rev-parse`, без сети), в отличие от check_for_updates() (та ещё
+    делает `git ls-remote`). Прямой запрос пользователя (2026-09-24):
+    "добавь чтоб в менеджере информация о сервере отображалась версия
+    коммита текущего на панели" — живой повод: путаница в этой же
+    сессии, действительно ли сервер уже получил вчерашний фикс nginx,
+    не было простого способа проверить это прямо из TESL-Manager, не
+    заходя на сервер отдельно. "?" на любую ошибку — тот же принцип,
+    что get_manager_commit()/get_launcher_commit() в TESL-Manager/TESL."""
+    try:
+        r = _run(["git", "rev-parse", "--short", "HEAD"], TIMEOUT_CHECK)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return "?"
+
+
 def check_for_updates() -> dict:
     """{"local": "<short>", "remote": "<short>", "up_to_date": bool}
     либо {"error": "..."} — никогда не бросает исключение наружу, вызывающий

@@ -114,7 +114,16 @@ def _migrate_legacy_if_needed(conn: sqlite3.Connection) -> None:
     каждому свежий id. Идемпотентно — если в builds уже есть хоть одна
     строка, ничего не делает; специально НЕ трогает и не удаляет старый
     projects.json (оставляем как есть на диске — не мешает, но и незачем
-    трогать файл, который сам код больше не читает)."""
+    трогать файл, который сам код больше не читает).
+
+    Свежая установка без legacy-файла — builds просто остаётся пустым,
+    первую сборку создаёт оператор сам через UI/API (кнопка "Новая
+    сборка" в TESL-Manager, или /admin/add-project). Раньше здесь было
+    жёстко зашитое имя-заглушка ("TESVAE", через env TESL_PANEL_PROJECTS)
+    для сидирования пустой установки — убрано по прямому запросу
+    пользователя (2026-09-24, "TESL_PANEL_PROJECTS=TESVAE надо удалить
+    из евн") — реестр сборок больше не нуждается в стартовом значении
+    по умолчанию, раз полноценное управление сборками уже есть."""
     count = conn.execute("SELECT COUNT(*) FROM builds").fetchone()[0]
     if count > 0:
         return
@@ -127,10 +136,6 @@ def _migrate_legacy_if_needed(conn: sqlite3.Connection) -> None:
             names = list(json.loads(legacy_path.read_text(encoding="utf-8")).get("projects", []))
         except Exception:
             names = []
-    if not names:
-        # Свежая установка без legacy-файла — сидируем тем же, чем раньше
-        # сидировался projects.json (config.INITIAL_PROJECTS).
-        names = sorted(set(config.INITIAL_PROJECTS))
 
     now = _now()
     for name in names:
