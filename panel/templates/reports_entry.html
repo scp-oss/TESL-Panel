@@ -38,7 +38,12 @@
       <ul>
         {% for f in files %}
           <li>
-            <a href="/admin/reports/{{ report_type }}/{{ username }}/{{ timestamp }}/{{ f.name }}">{{ f.name }}</a>
+            <span>
+              {{ f.name }}
+              <a href="/admin/reports/{{ report_type }}/{{ username }}/{{ timestamp }}/{{ f.name }}/view">👁 просмотр</a>
+              &middot;
+              <a href="/admin/reports/{{ report_type }}/{{ username }}/{{ timestamp }}/{{ f.name }}">⬇ скачать</a>
+            </span>
             <span class="muted">{{ (f.size / 1024) | round(1) }} КБ</span>
           </li>
         {% endfor %}

@@ -525,7 +525,54 @@ def create_app() -> Flask:
             abort(400)
         if not path.is_file():
             abort(404)
+        # Живой запрос: "оставь возможность скачать их но добавь
+        # просмоторщик" — этот маршрут остаётся ровно тем, чем был
+        # (принудительное скачивание, application/octet-stream), новый
+        # /view ниже — отдельный, читающий маршрут для просмотра прямо в
+        # браузере, ничего здесь не меняется.
         return send_file(path, mimetype="application/octet-stream", conditional=True)
+
+    @app.get("/admin/reports/<report_type>/<username>/<timestamp>/<filename>/view")
+    @_admin_required
+    def admin_reports_view(report_type, username, timestamp, filename):
+        if not reports_storage.is_valid_report_type(report_type):
+            abort(404)
+        try:
+            path = reports_storage.get_file_path(report_type, username, timestamp, filename)
+        except ReportsUnsafePathError:
+            abort(400)
+        if not path.is_file():
+            abort(404)
+        size = path.stat().st_size
+        text, error = None, None
+        # Живой инцидент этого репозитория (см. CLAUDE.md, "проверено
+        # storage.py::MAX_INLINE_EDIT_BYTES") — тот же принцип: крэш-репорт
+        # может тащить за собой бинарный сейв (.ess) или разрастись до
+        # МБ-ов текста, тянуть это целиком в HTML-страницу без ограничения
+        # было бы и медленно, и незачем — показываем текст только до
+        # разумного предела, иначе явно объясняем и отправляем к
+        # обычному скачиванию (кнопка на этой же странице).
+        if size > reports_storage.MAX_VIEW_BYTES:
+            error = (
+                f"Файл слишком большой для просмотра в браузере "
+                f"({size / 1024 / 1024:.1f} МБ > "
+                f"{reports_storage.MAX_VIEW_BYTES / 1024 / 1024:.0f} МБ) — скачайте и откройте локально."
+            )
+        else:
+            raw = path.read_bytes()
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                try:
+                    text = raw.decode("cp1251")
+                except UnicodeDecodeError:
+                    error = "Бинарный файл — просмотр как текст не имеет смысла, скачайте его."
+        return render_template(
+            "report_view.html",
+            report_type=report_type, title=reports_storage.REPORT_TYPES[report_type],
+            username=username, timestamp=timestamp, filename=filename,
+            size=size, text=text, error=error,
+        )
 
     @app.post("/admin/reports/<report_type>/<username>/<timestamp>/delete")
     @_admin_required
