@@ -31,7 +31,7 @@ from flask import (
     session, url_for,
 )
 
-from . import builds_db, config, github_releases, reports_storage, self_update, storage, system_stats
+from . import builds_db, config, github_releases, reports_storage, self_update, storage, system_stats, token_rotate
 from .storage import UnsafePathError
 from .reports_storage import UnsafePathError as ReportsUnsafePathError
 
@@ -166,6 +166,7 @@ def create_app() -> Flask:
             upload_domain=config.UPLOAD_DOMAIN,
             update_info=None,
             update_result=None,
+            token_result=None,
         )
 
     @app.post("/admin/settings/check-updates")
@@ -178,6 +179,7 @@ def create_app() -> Flask:
             upload_domain=config.UPLOAD_DOMAIN,
             update_info=self_update.check_for_updates(),
             update_result=None,
+            token_result=None,
         )
 
     @app.post("/admin/settings/apply-update")
@@ -191,6 +193,26 @@ def create_app() -> Flask:
             upload_domain=config.UPLOAD_DOMAIN,
             update_info=None,
             update_result={"ok": ok, "message": msg},
+            token_result=None,
+        )
+
+    @app.post("/admin/settings/rotate-token")
+    @_admin_required
+    def admin_settings_rotate_token():
+        ok, msg, new_token = token_rotate.rotate_upload_token()
+        return render_template(
+            "settings.html",
+            # Код настройки из ТЕКУЩЕГО (ещё старого до рестарта) токена —
+            # см. token_rotate.rotate_upload_token()'s докстринг: новое
+            # значение реально на диске, но этот процесс ещё не
+            # перезапущен, поэтому config.UPLOAD_TOKEN здесь пока старый.
+            # token_result ниже показывает НОВЫЙ токен отдельно, явно.
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
+            update_info=None,
+            update_result=None,
+            token_result={"ok": ok, "message": msg, "new_token": new_token},
         )
 
     # ── Admin: страница одной сборки (по ИМЕНИ в URL — человеко-читаемо,

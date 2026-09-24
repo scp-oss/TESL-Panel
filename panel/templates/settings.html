@@ -146,6 +146,22 @@
         Cloudflare — на код настройки это не влияет.
       </p>
     {% endif %}
+
+    <form method="post" action="/admin/settings/rotate-token" style="margin-top:14px;"
+          onsubmit="return confirm('Перегенерировать токен? Старый код настройки и старая ссылка входа сразу перестанут работать — TESL-Manager и все, кто заходит по старой ссылке, нужно будет обновить на новый код.');">
+      <button type="submit">🔄 Перегенерировать токен</button>
+    </form>
+
+    {% if token_result %}
+      {% if token_result.ok %}
+        <div class="ok">
+          ✅ {{ token_result.message }}<br>
+          Новый токен: <code>{{ token_result.new_token }}</code>
+        </div>
+      {% else %}
+        <div class="err">❌ {{ token_result.message }}</div>
+      {% endif %}
+    {% endif %}
   </div>
 
   <div class="card">
