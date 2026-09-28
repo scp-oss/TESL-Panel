@@ -102,19 +102,16 @@
   <p class="lead">Лаунчер и менеджер сборки Skyrim SE — актуальные версии всегда здесь.</p>
 
   <div class="cards">
-    {% for key, title in titles.items() %}
-      {% set r = releases.get(key) %}
-      <div class="card">
-        <h2>{{ title }}</h2>
-        {% if r %}
-          <div class="meta">{{ r.tag }} · {{ (r.size_bytes / 1024 / 1024) | round(1) }} МБ</div>
-          <a class="btn" href="{{ r.download_url }}">Скачать {{ r.asset_name }}</a>
-        {% else %}
-          <div class="meta unavailable">Релиз временно недоступен</div>
-          <span class="btn disabled">Скачать</span>
-        {% endif %}
-      </div>
-    {% endfor %}
+    <div class="card">
+      <h2>{{ title }}</h2>
+      {% if release %}
+        <div class="meta">{{ release.tag }} · {{ (release.size_bytes / 1024 / 1024) | round(1) }} МБ</div>
+        <a class="btn" href="{{ release.download_url }}">Скачать {{ release.asset_name }}</a>
+      {% else %}
+        <div class="meta unavailable">Релиз временно недоступен</div>
+        <span class="btn disabled">Скачать</span>
+      {% endif %}
+    </div>
   </div>
 
   <footer>Сборка распространяется отдельно, через лаунчер.</footer>

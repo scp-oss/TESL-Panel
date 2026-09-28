@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TESL-Panel — документы {{ name }}</title>
+  <style>
+    :root { color-scheme: dark; --bg: #0f1115; --card: #171a21; --card-border: #262b36;
+      --text: #e7e9ee; --muted: #9aa3b2; --accent: #5b8def; --accent-hover: #4a78d6;
+      --danger: #e5555f; --danger-hover: #c8434c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; flex-direction: column; align-items: center; padding: 48px 16px; }
+    a { color: var(--accent); }
+    h1 { font-size: 1.3rem; margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--card-border); border-radius: 12px;
+      padding: 20px; width: 100%; max-width: 680px; margin-bottom: 16px; }
+    .card h2 { margin: 0 0 4px; font-size: 1rem; color: var(--muted); }
+    .card .hint { color: var(--muted); font-size: 0.8rem; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--card-border); vertical-align: middle; }
+    th { color: var(--muted); font-weight: 500; }
+    td.name { word-break: break-all; }
+    td.size, td.meta { white-space: nowrap; color: var(--muted); }
+    td.actions { white-space: nowrap; text-align: right; }
+    td.actions a, td.actions button { margin-left: 6px; font-size: 0.8rem; }
+    button.link { background: none; border: none; color: var(--danger); cursor: pointer;
+      font-size: 0.8rem; padding: 0; text-decoration: underline; }
+    button.link:hover { color: var(--danger-hover); }
+    button.icon { background: none; border: 1px solid var(--card-border); color: var(--text);
+      cursor: pointer; font-size: 0.8rem; padding: 2px 6px; border-radius: 4px; }
+    button.icon:disabled { opacity: 0.3; cursor: not-allowed; }
+    button.icon:hover:not(:disabled) { border-color: var(--accent); }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 12px 0 4px; }
+    input[type=text], input[type=file] {
+      width: 100%; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--card-border);
+      background: #0f1115; color: var(--text); font-size: 0.9rem;
+    }
+    button.submit { margin-top: 16px; background: var(--accent); color: #fff; border: none;
+      padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button.submit:hover { background: var(--accent-hover); }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .poster-row { display: flex; gap: 16px; align-items: flex-start; }
+    .poster-preview { width: 120px; height: 160px; object-fit: cover; border-radius: 8px;
+      border: 1px solid var(--card-border); background: #0f1115; }
+    .danger-btn { background: var(--danger); color: #fff; border: none; padding: 6px 12px;
+      border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 0.8rem; }
+    .danger-btn:hover { background: var(--danger-hover); }
+  </style>
+</head>
+<body>
+  <h1><a href="/admin/project/{{ name }}">&larr; {{ name }}</a> / Документы и патчи</h1>
+
+  <div class="card">
+    <h2>🖼 Постер сборки</h2>
+    <p class="hint">poster.png — общий на всю сборку, не версионируется. Показывается
+      в карусели сборок лаунчера.</p>
+    <div class="poster-row">
+      {% if has_poster %}
+        <img class="poster-preview" src="/api/depot/{{ name }}/poster.png?_={{ range(1, 999999) | random }}" alt="постер">
+      {% else %}
+        <div class="poster-preview" style="display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:0.75rem;">нет</div>
+      {% endif %}
+      <div style="flex:1;">
+        <form method="post" action="/admin/project/{{ name }}/documents/poster/upload" enctype="multipart/form-data">
+          <label for="poster-file">Заменить / загрузить (PNG)</label>
+          <input type="file" id="poster-file" name="file" accept="image/png" required>
+          <button class="submit" type="submit">Загрузить</button>
+        </form>
+        {% if has_poster %}
+        <form method="post" action="/admin/project/{{ name }}/documents/poster/remove"
+              onsubmit="return confirm('Удалить постер?');" style="margin-top:10px;">
+          <button class="danger-btn" type="submit">Удалить постер</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>📄 Шаблоны настроек (documents/)</h2>
+    <p class="hint">Общие на всю сборку .ini-шаблоны и т.п. Галочка — применяет ли их лаунчер;
+      выключенные остаются на сервере про запас, без снятия галочки лаунчер их не тронет.</p>
+    {% if documents %}
+      <table>
+        <thead><tr><th></th><th>Файл</th><th>Размер</th><th></th></tr></thead>
+        <tbody>
+          {% for d in documents %}
+          <tr>
+            <td>
+              <form method="post" action="/admin/project/{{ name }}/documents/doc/toggle" style="display:inline">
+                <input type="hidden" name="path" value="{{ d.path }}">
+                <input type="hidden" name="enabled" value="{{ '0' if d.enabled else '1' }}">
+                <button class="icon" type="submit" title="{{ 'выключить' if d.enabled else 'включить' }}">{{ '✅' if d.enabled else '⬜' }}</button>
+              </form>
+            </td>
+            <td class="name"><code>{{ d.name }}</code></td>
+            <td class="size">{{ (d.size / 1024) | round(1) }} КБ</td>
+            <td class="actions">
+              <a href="/admin/project/{{ name }}/documents/doc/edit?path={{ d.path | urlencode }}">открыть</a>
+              <a href="/api/depot/{{ name }}/{{ d.path }}">скачать</a>
+              <form style="display:inline" method="post" action="/admin/project/{{ name }}/documents/doc/delete"
+                    onsubmit="return confirm('Удалить {{ d.name }}?');">
+                <input type="hidden" name="path" value="{{ d.path }}">
+                <button class="link" type="submit">удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Пока пусто.</p>
+    {% endif %}
+    <form method="post" action="/admin/project/{{ name }}/documents/doc/add" enctype="multipart/form-data">
+      <label for="doc-file">Добавить шаблон</label>
+      <input type="file" id="doc-file" name="file" required>
+      <button class="submit" type="submit">Загрузить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>🩹 Патчи (patch/)</h2>
+    <p class="hint">Применяются лаунчером по очереди (не по имени файла) — переставляйте
+      кнопками. Имя файлу присваивается автоматически (номер_версия_дата).</p>
+    {% if patches %}
+      <table>
+        <thead><tr><th></th><th>#</th><th>Файл</th><th>Размер</th><th>Версия/дата</th><th></th></tr></thead>
+        <tbody>
+          {% for p in patches %}
+          <tr>
+            <td>
+              <form method="post" action="/admin/project/{{ name }}/documents/patch/toggle" style="display:inline">
+                <input type="hidden" name="path" value="{{ p.path }}">
+                <input type="hidden" name="enabled" value="{{ '0' if p.enabled else '1' }}">
+                <button class="icon" type="submit" title="{{ 'выключить' if p.enabled else 'включить' }}">{{ '✅' if p.enabled else '⬜' }}</button>
+              </form>
+            </td>
+            <td class="meta">{{ loop.index }}</td>
+            <td class="name"><code>{{ p.name }}</code></td>
+            <td class="size">{{ (p.size / 1024) | round(1) }} КБ</td>
+            <td class="meta">{{ [p.version, p.date] | select | join(' / ') }}</td>
+            <td class="actions">
+              <form method="post" action="/admin/project/{{ name }}/documents/patch/move" style="display:inline">
+                <input type="hidden" name="path" value="{{ p.path }}">
+                <input type="hidden" name="dir" value="up">
+                <button class="icon" type="submit" {{ 'disabled' if loop.first }}>🔼</button>
+              </form>
+              <form method="post" action="/admin/project/{{ name }}/documents/patch/move" style="display:inline">
+                <input type="hidden" name="path" value="{{ p.path }}">
+                <input type="hidden" name="dir" value="down">
+                <button class="icon" type="submit" {{ 'disabled' if loop.last }}>🔽</button>
+              </form>
+              <a href="/api/depot/{{ name }}/{{ p.path }}">скачать</a>
+              <form style="display:inline" method="post" action="/admin/project/{{ name }}/documents/patch/delete"
+                    onsubmit="return confirm('Удалить патч {{ p.name }}? Действие необратимо.');">
+                <input type="hidden" name="path" value="{{ p.path }}">
+                <button class="link" type="submit">удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Пока пусто.</p>
+    {% endif %}
+    <form method="post" action="/admin/project/{{ name }}/documents/patch/add" enctype="multipart/form-data">
+      <label for="patch-version">Версия (например 1.0.3)</label>
+      <input type="text" id="patch-version" name="version" placeholder="1.0.3">
+      <label for="patch-file">Файл патча (.bat/.py)</label>
+      <input type="file" id="patch-file" name="file" required>
+      <button class="submit" type="submit">Загрузить (добавится последним в очередь)</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>📦 Файлы патчей (patchs/)</h2>
+    <p class="hint">Вспомогательные файлы (например .dll), на которые ссылаются сами патчи по
+      относительному пути. Без собственного enabled/order — просто хранилище.</p>
+    {% if patchfiles %}
+      <table>
+        <thead><tr><th>Файл</th><th>Размер</th><th></th></tr></thead>
+        <tbody>
+          {% for pf in patchfiles %}
+          <tr>
+            <td class="name"><code>{{ pf.name }}</code></td>
+            <td class="size">{{ (pf.size / 1024) | round(1) }} КБ</td>
+            <td class="actions">
+              <a href="/api/depot/{{ name }}/{{ pf.path }}">скачать</a>
+              <form style="display:inline" method="post" action="/admin/project/{{ name }}/documents/patchfile/delete"
+                    onsubmit="return confirm('Удалить {{ pf.name }}?');">
+                <input type="hidden" name="path" value="{{ pf.path }}">
+                <button class="link" type="submit">удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">Пока пусто.</p>
+    {% endif %}
+    <form method="post" action="/admin/project/{{ name }}/documents/patchfile/add" enctype="multipart/form-data">
+      <label for="pf-file">Добавить файл</label>
+      <input type="file" id="pf-file" name="file" required>
+      <button class="submit" type="submit">Загрузить</button>
+    </form>
+  </div>
+</body>
+</html>

@@ -33,10 +33,15 @@
   </style>
 </head>
 <body>
-  <h1><a href="/admin/project/{{ name }}/files">&larr; {{ name }} / файлы</a></h1>
+  <h1><a href="/admin/project/{{ name }}/files{{ '?dir=' ~ (current_dir | urlencode) if current_dir }}">&larr; {{ name }} / файлы</a></h1>
 
   <div class="card">
-    {% if too_big %}
+    {% if component %}
+      <p class="warn">🔒 Файл компонента сборки — доступен только для чтения здесь.
+        Чтобы изменить: поменяйте его в локальной папке компонента и опубликуйте
+        сборку заново через TESL-Manager («🚀 Релизы»).
+        <a href="/api/depot/{{ name }}/{{ rel_path }}">Скачать</a></p>
+    {% elif too_big %}
       <p class="warn">Файл больше 256 КБ — инлайн-редактор не показывает такие (обычно это
         chunk с бинарными данными). <a href="/api/depot/{{ name }}/{{ rel_path }}">Скачать</a>,
         отредактировать локально и загрузить обратно через форму "Загрузить файл" на странице
@@ -48,13 +53,14 @@
     {% endif %}
 
     <form method="post" action="/admin/project/{{ name }}/files/edit">
+      <input type="hidden" name="dir" value="{{ current_dir }}">
       <label for="path">Путь (существующий — правка, новый — создание файла)</label>
       <input type="text" id="path" name="path" value="{{ rel_path }}" required
              {% if rel_path %}readonly{% endif %}>
       <label for="content">Содержимое</label>
-      <textarea id="content" name="content" {% if too_big or binary %}disabled{% endif %}
+      <textarea id="content" name="content" {% if too_big or binary or component %}disabled{% endif %}
         >{{ content }}</textarea>
-      <button class="submit" type="submit" {% if too_big or binary %}disabled{% endif %}>Сохранить</button>
+      <button class="submit" type="submit" {% if too_big or binary or component %}disabled{% endif %}>Сохранить</button>
     </form>
   </div>
 </body>

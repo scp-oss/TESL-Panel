@@ -31,7 +31,10 @@ from flask import (
     session, url_for,
 )
 
-from . import builds_db, config, github_releases, reports_storage, self_update, storage, system_stats, token_rotate
+from . import (
+    builds_db, config, depot_view, extras_manifest, github_releases,
+    reports_storage, self_update, storage, system_stats, token_rotate,
+)
 from .storage import UnsafePathError
 from .reports_storage import UnsafePathError as ReportsUnsafePathError
 
@@ -42,14 +45,19 @@ def create_app() -> Flask:
 
     # ── Публичная страница ──────────────────────────────────────────────────
 
+    # Публично — только лаунчер (2026-09-28, прямой запрос: "возможность
+    # скачивания менеджера только с раздела админа"). TESL-Manager публикует
+    # НОВЫЕ сборки на этот же сервер, дал бы игроку RCE-по-доверию в
+    # неправильных руках не сам по себе, но это оператор-инструмент —
+    # незачем рекламировать его случайным посетителям публичной страницы.
+    # Ссылка на скачивание переехала в /admin (см. admin_page() ниже) —
+    # доступна только после входа тем же UPLOAD_TOKEN, что и вся остальная
+    # запись/управление сборками.
     @app.get("/")
     def index():
-        releases = {
-            key: github_releases.get_latest_release(key)
-            for key in config.GITHUB_REPOS
-        }
-        titles = {key: spec["title"] for key, spec in config.GITHUB_REPOS.items()}
-        return render_template("index.html", releases=releases, titles=titles)
+        release = github_releases.get_latest_release("launcher")
+        title = config.GITHUB_REPOS["launcher"]["title"]
+        return render_template("index.html", release=release, title=title)
 
     @app.get("/health")
     def health():
@@ -121,7 +129,11 @@ def create_app() -> Flask:
     @app.get("/admin")
     @_admin_required
     def admin_page():
-        return render_template("admin.html", builds=builds_db.list_builds(), error=None)
+        return render_template(
+            "admin.html", builds=builds_db.list_builds(), error=None,
+            manager_release=github_releases.get_latest_release("manager"),
+            manager_title=config.GITHUB_REPOS["manager"]["title"],
+        )
 
     @app.post("/admin/add-project")
     @_admin_required
@@ -286,12 +298,20 @@ def create_app() -> Flask:
             abort(404)
         return build["id"]
 
+    # Группировка по компонентам (Skyrim/MO2p/MO2ext, из depot_manifest.json)
+    # + скрытие служебных путей + навигация по папкам — зеркалит TESL-Manager's
+    # depot_files_tab.py на сервере, см. depot_view.py за детали. Компонентные
+    # файлы read-only (depot_view.is_component_path() — проверяется в КАЖДОМ
+    # мутирующем обработчике ниже, до любой записи/удаления).
+
     @app.get("/admin/project/<name>/files")
     @_admin_required
     def admin_files(name):
         build_id = _build_id_by_name_or_404(name)
+        current_dir = request.args.get("dir", "").strip("/")
         return render_template(
-            "files.html", name=name, files=storage.list_files(build_id), error=None,
+            "files.html", name=name, current_dir=current_dir,
+            tree=depot_view.render_tree(build_id, current_dir), error=None,
         )
 
     @app.get("/admin/project/<name>/files/edit")
@@ -299,10 +319,12 @@ def create_app() -> Flask:
     def admin_file_edit(name):
         build_id = _build_id_by_name_or_404(name)
         rel_path = request.args.get("path", "").strip()
+        current_dir = request.args.get("dir", "").strip("/")
         content = ""
         too_big = False
         binary = False
-        if rel_path:
+        component = bool(rel_path) and depot_view.is_component_path(rel_path)
+        if rel_path and not component:
             data = storage.get_bytes(build_id, rel_path)
             if data is not None:
                 if len(data) > storage.MAX_INLINE_EDIT_BYTES:
@@ -314,7 +336,7 @@ def create_app() -> Flask:
                         binary = True
         return render_template(
             "file_edit.html", name=name, rel_path=rel_path, content=content,
-            too_big=too_big, binary=binary,
+            too_big=too_big, binary=binary, component=component, current_dir=current_dir,
         )
 
     @app.post("/admin/project/<name>/files/edit")
@@ -323,38 +345,208 @@ def create_app() -> Flask:
         build_id = _build_id_by_name_or_404(name)
         rel_path = request.form.get("path", "").strip()
         content  = request.form.get("content", "")
+        current_dir = request.form.get("dir", "").strip("/")
         if not rel_path:
             abort(400, description="путь не указан")
+        if depot_view.is_component_path(rel_path):
+            abort(400, description="файл компонента сборки — доступен только для чтения здесь")
         try:
             storage.put_bytes(build_id, rel_path, content.encode("utf-8"))
         except UnsafePathError:
             abort(400, description="некорректный путь")
-        return redirect(url_for("admin_files", name=name))
+        return redirect(url_for("admin_files", name=name, dir=current_dir))
 
     @app.post("/admin/project/<name>/files/upload")
     @_admin_required
     def admin_file_upload(name):
         build_id = _build_id_by_name_or_404(name)
         f = request.files.get("file")
+        current_dir = request.form.get("dir", "").strip("/")
         rel_path = request.form.get("path", "").strip() or (f.filename if f else "")
+        if current_dir and rel_path and "/" not in rel_path:
+            rel_path = f"{current_dir}/{rel_path}"
         if not f or not rel_path:
             abort(400, description="нужны и файл, и путь назначения")
+        if depot_view.is_component_path(rel_path):
+            abort(400, description="нельзя загружать напрямую в папку компонента сборки")
         try:
             storage.put_bytes(build_id, rel_path, f.read())
         except UnsafePathError:
             abort(400, description="некорректный путь")
-        return redirect(url_for("admin_files", name=name))
+        return redirect(url_for("admin_files", name=name, dir=current_dir))
 
     @app.post("/admin/project/<name>/files/delete")
     @_admin_required
     def admin_file_delete(name):
         build_id = _build_id_by_name_or_404(name)
         rel_path = request.form.get("path", "").strip()
+        current_dir = request.form.get("dir", "").strip("/")
+        if depot_view.is_component_path(rel_path):
+            abort(400, description="файл компонента сборки — доступен только для чтения здесь")
         try:
             storage.delete_file(build_id, rel_path)
         except UnsafePathError:
             abort(400, description="некорректный путь")
-        return redirect(url_for("admin_files", name=name))
+        return redirect(url_for("admin_files", name=name, dir=current_dir))
+
+    # ── Admin: документы/патчи/файлы патчей/постер (extras_manifest.json) —
+    #    перенос TESL-Manager's documents_tab.py + depot_tab.py's постер-
+    #    секции в браузер (2026-09-28, "перенести функционал менеджера кроме
+    #    заливки релизов"). Работает поверх уже опубликованного депо, не
+    #    трогает сам процесс публикации (тот остаётся десктоп-only — требует
+    #    сканирования локальной папки компонента на машине оператора). ──────
+
+    @app.get("/admin/project/<name>/documents")
+    @_admin_required
+    def admin_documents(name):
+        build_id = _build_id_by_name_or_404(name)
+        return render_template(
+            "documents.html", name=name,
+            documents=extras_manifest.list_documents(build_id),
+            patches=extras_manifest.list_patches(build_id),
+            patchfiles=extras_manifest.list_patchfiles(build_id),
+            has_poster=storage.exists(build_id, "poster.png"),
+        )
+
+    @app.post("/admin/project/<name>/documents/doc/add")
+    @_admin_required
+    def admin_doc_add(name):
+        build_id = _build_id_by_name_or_404(name)
+        f = request.files.get("file")
+        if not f or not f.filename:
+            abort(400, description="нужен файл")
+        extras_manifest.add_document(build_id, f.filename, f.read())
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/doc/toggle")
+    @_admin_required
+    def admin_doc_toggle(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        enabled = request.form.get("enabled") == "1"
+        if path:
+            extras_manifest.set_entry_enabled(build_id, "documents", path, enabled)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/doc/delete")
+    @_admin_required
+    def admin_doc_delete(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        if path:
+            extras_manifest.delete_document(build_id, path)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.get("/admin/project/<name>/documents/doc/edit")
+    @_admin_required
+    def admin_doc_edit(name):
+        build_id = _build_id_by_name_or_404(name)
+        rel_path = request.args.get("path", "").strip()
+        content, too_big, binary = "", False, False
+        if rel_path:
+            data = storage.get_bytes(build_id, rel_path)
+            if data is not None:
+                if len(data) > storage.MAX_INLINE_EDIT_BYTES:
+                    too_big = True
+                else:
+                    try:
+                        content = data.decode("utf-8")
+                    except UnicodeDecodeError:
+                        try:
+                            content = data.decode("cp1251")
+                        except UnicodeDecodeError:
+                            binary = True
+        return render_template(
+            "doc_edit.html", name=name, rel_path=rel_path, content=content,
+            too_big=too_big, binary=binary,
+        )
+
+    @app.post("/admin/project/<name>/documents/doc/edit")
+    @_admin_required
+    def admin_doc_edit_post(name):
+        build_id = _build_id_by_name_or_404(name)
+        rel_path = request.form.get("path", "").strip()
+        content  = request.form.get("content", "")
+        if not rel_path:
+            abort(400, description="путь не указан")
+        extras_manifest.edit_document(build_id, rel_path, content.encode("utf-8"))
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patch/add")
+    @_admin_required
+    def admin_patch_add(name):
+        build_id = _build_id_by_name_or_404(name)
+        f = request.files.get("file")
+        version = request.form.get("version", "")
+        if not f or not f.filename:
+            abort(400, description="нужен файл патча")
+        extras_manifest.add_patch(build_id, f.filename, version, f.read())
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patch/toggle")
+    @_admin_required
+    def admin_patch_toggle(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        enabled = request.form.get("enabled") == "1"
+        if path:
+            extras_manifest.set_entry_enabled(build_id, "patch", path, enabled)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patch/delete")
+    @_admin_required
+    def admin_patch_delete(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        if path:
+            extras_manifest.delete_patch(build_id, path)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patch/move")
+    @_admin_required
+    def admin_patch_move(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        delta = -1 if request.form.get("dir") == "up" else 1
+        if path:
+            extras_manifest.move_patch(build_id, path, delta)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patchfile/add")
+    @_admin_required
+    def admin_patchfile_add(name):
+        build_id = _build_id_by_name_or_404(name)
+        f = request.files.get("file")
+        if not f or not f.filename:
+            abort(400, description="нужен файл")
+        extras_manifest.add_patchfile(build_id, f.filename, f.read())
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/patchfile/delete")
+    @_admin_required
+    def admin_patchfile_delete(name):
+        build_id = _build_id_by_name_or_404(name)
+        path = request.form.get("path", "").strip()
+        if path:
+            extras_manifest.delete_patchfile(build_id, path)
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/poster/upload")
+    @_admin_required
+    def admin_poster_upload(name):
+        build_id = _build_id_by_name_or_404(name)
+        f = request.files.get("file")
+        if not f or not f.filename:
+            abort(400, description="нужен файл")
+        storage.put_bytes(build_id, "poster.png", f.read())
+        return redirect(url_for("admin_documents", name=name))
+
+    @app.post("/admin/project/<name>/documents/poster/remove")
+    @_admin_required
+    def admin_poster_remove(name):
+        build_id = _build_id_by_name_or_404(name)
+        storage.delete_file(build_id, "poster.png")
+        return redirect(url_for("admin_documents", name=name))
 
     # ── Builds API (JSON, для десктоп-GUI TESL-Manager, см. его depot_tab.py:
     #    серверный список/создание/удаление/переименование сборок вместо
