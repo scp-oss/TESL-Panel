@@ -2,19 +2,21 @@
 
 Тонкий веб-сервис для проекта TESL (лаунчер + менеджер сборки Skyrim SE):
 
-1. **Страница скачивания** (`/`) — кнопки "скачать TESL.exe" / "скачать
-   TESL-Manager.exe", ссылки берутся из последнего GitHub Release каждого
-   репозитория (`scp-oss/TESL`, `scp-oss/TESL-Manager`).
-2. **API публикации депо** (`/api/depot/<project>/...`) — приёмник для
+1. **Страница скачивания** (`/`) — кнопка "скачать TESL.exe", ссылка
+   берётся из последнего GitHub Release (`scp-oss/TESL`). Скачивание
+   TESL-Manager.exe — только из `/admin`, после входа (см. п.3).
+2. **API публикации депо** (`/api/depot/<build_id>/...`) — приёмник для
    новых версий сборки, пишет чанки/манифесты напрямую на диск сервера,
    в обход Nextcloud/WebDAV. Формат на диске идентичен тому, что раньше
    публиковалось на WebDAV (`chunks/<xx>/<id>`, `versions/<key>.json`,
-   `depot.json`) — меняется только транспорт.
-3. **Страница `/admin`** — список текущих сборок (project'ов) + форма
-   добавить новую по upload-токену. Список хранится на диске
-   (`<STORAGE_ROOT>/_meta/projects.json`) и подхватывается сразу, без
-   рестарта сервиса — `--projects` при деплое нужен только для самого
-   первого запуска (сид).
+   `depot.json`) — меняется только транспорт. `build_id` — реальный ключ
+   (UUID), не имя сборки — см. `panel/builds_db.py`.
+3. **Страница `/admin`** — список сборок (создать/переименовать/удалить),
+   скачивание TESL-Manager.exe, файловый браузер сборки (с группировкой
+   по компонентам Skyrim/MO2p/MO2ext), документы/патчи/постер
+   (`/admin/project/<name>/documents`), отчёты, дашборд, настройки.
+   Реестр сборок — SQLite (`<STORAGE_ROOT>/_meta/builds.db`,
+   `panel/builds_db.py`), подхватывается сразу, без рестарта сервиса.
 
 Сама раздача уже опубликованной сборки (то, что скачивает игрок через
 TESL) пока остаётся на Nextcloud/WebDAV — эта панель её не подменяет, см.
@@ -25,7 +27,7 @@ TESL) пока остаётся на Nextcloud/WebDAV — эта панель е
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-TESL_PANEL_STORAGE_ROOT=./data TESL_PANEL_UPLOAD_TOKEN=devtoken TESL_PANEL_PROJECTS=TESVAE \
+TESL_PANEL_STORAGE_ROOT=./data TESL_PANEL_UPLOAD_TOKEN=devtoken \
   .venv/bin/flask --app panel.app run --port 8080
 ```
 
@@ -58,8 +60,7 @@ sudo ./infra/deploy.sh --domain panel.example.com \
 | Переменная                      | Назначение                                   |
 |----------------------------------|-----------------------------------------------|
 | `TESL_PANEL_STORAGE_ROOT`        | Корень хранилища депо на диске                |
-| `TESL_PANEL_UPLOAD_TOKEN`        | Bearer-токен для записи (`PUT`)               |
-| `TESL_PANEL_PROJECTS`            | Через запятую — сид проектов при первом запуске (дальше см. `/admin`) |
+| `TESL_PANEL_UPLOAD_TOKEN`        | Bearer-токен для записи (`PUT`) и входа в `/admin` |
 | `TESL_PANEL_GITHUB_CACHE_TTL`    | Кэш ответа GitHub API, секунды (по умолч. 300)|
 
 Чтение депо (`GET`/`HEAD`) токена не требует — та же логика, что у
