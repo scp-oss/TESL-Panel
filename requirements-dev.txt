@@ -8,3 +8,13 @@ pytest>=8.0
 # находка 2026-09-29 — маскировалась в песочнице, где PyQt6 уже был
 # установлен по другой причине.
 PyQt6>=6.6
+# Тот же venv, что запускает pytest, запускает и подпроцесс
+# manager_publish.py (через sys.executable — ЭТОТ же интерпретатор, не
+# отдельное окружение TESL-Manager), поэтому все его зависимости живут
+# здесь, а не в requirements.txt TESL-Manager. Живой инцидент 2026-09-29:
+# `pack_writer.py`'s `import sqlite3` упал с `ModuleNotFoundError:
+# _sqlite3` на реальном сервере (Python собран из исходников без этого
+# C-расширения — тот же класс проблемы, что уже чинился в этом
+# репозитории для panel/builds_db.py). Fallback (`import pysqlite3 as
+# sqlite3`) уже в коде TESL-Manager — здесь просто ставим сам пакет.
+pysqlite3-binary>=0.5
