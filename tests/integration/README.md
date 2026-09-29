@@ -36,14 +36,30 @@ parent/
 одиночку.
 
 ```bash
-pip install pytest
 cd TESL-Panel
-pytest tests/integration/ -v -s
+python3 -m venv .venv        # если venv-а ещё нет (deploy.sh на проде уже создал свой)
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/pytest tests/integration/ -v -s
 ```
 
 `-s` стоит держать — сами подпроцессы (`manager_publish.py`/
 `launcher_verify.py`) печатают происходящее, полезно при диагностике
 падения.
+
+**`PyQt6` в `requirements-dev.txt`** — не нужен самой панели, нужен
+только подпроцессу `manager_publish.py` (использует `depot_sync_manager.*`
+из TESL-Manager, там сигналы прогресса — `QObject`/`pyqtSignal`).
+`QApplication` при этом никогда не создаётся, поэтому это ставится и
+работает на headless Linux-сервере без иксов и без
+`QT_QPA_PLATFORM=offscreen` — проверено именно на реальном сервере
+(2026-09-29), не только в разработческой песочнице.
+
+**Голая команда `pytest` (без `python3 -m`)** — до `pytest.ini`
+(`pythonpath = .`) не находила `panel.app` (`ModuleNotFoundError`),
+потому что не добавляет текущую директорию в `sys.path` сама, в
+отличие от `python3 -m pytest`. Живой баг, найден на реальном сервере
+в тот же день, что и сам тест — теперь работает одинаково независимо
+от того, как запущен pytest.
 
 ## Что реально проверяется
 

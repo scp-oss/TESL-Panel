@@ -1,1 +1,10 @@
 pytest>=8.0
+# PyQt6 — не нужен самой панели, нужен ТОЛЬКО подпроцессу
+# tests/integration/manager_publish.py (импортирует depot_sync_manager.*
+# из TESL-Manager, а те используют QObject/pyqtSignal для сигналов
+# прогресса — сама GUI/дисплей не создаётся, QApplication ни разу не
+# инстанцируется, поэтому PyQt6 ставится и работает на headless Linux-
+# сервере без иксов/QT_QPA_PLATFORM=offscreen, проверено). Живая
+# находка 2026-09-29 — маскировалась в песочнице, где PyQt6 уже был
+# установлен по другой причине.
+PyQt6>=6.6
