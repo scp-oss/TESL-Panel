@@ -810,19 +810,43 @@ def create_app() -> Flask:
             abort(400)
         return redirect(url_for("admin_reports_user", report_type=report_type, username=username))
 
-    # ── Приём отчётов (Bearer, тот же токен, что и /api/depot/* запись) —
-    #    PUT по одному файлу за раз, та же форма, что и depot_object ниже,
-    #    для единообразия. НИЧЕМ пока не вызывается (лаунчер не трогаем в
-    #    этом заходе) — эндпоинт существует, чтобы включить это одной
-    #    правкой на стороне лаунчера позже, без изменений здесь. ────────────
+    # ── Приём отчётов — ДВА разных уровня доверия под одним роутом
+    #    (2026-09-29, прямой запрос "поправь отправку логов в панель" после
+    #    живого 403 на WebDAV MKCOL DEBUG_Log/ — см. TESL/CLAUDE.md за
+    #    диагноз: общий WebDAV-аккаунт лаунчера не имеет прав создавать НОВЫЕ
+    #    папки под Staticfolders/, тогда как CRASH_Log была создана вручную
+    #    заранее — это серверные права, не чинится в коде клиента).
+    #
+    #    "crash"/"debug_log" (report_type — из TESL-лаунчера, публичный
+    #    .exe у КАЖДОГО игрока) — БЕЗ Bearer. Внедрять сюда UPLOAD_TOKEN
+    #    было бы катастрофой: тот же токен пишет/удаляет ЛЮБОЙ файл депо
+    #    (вплоть до подмены игровых файлов, которые потом качают все
+    #    остальные игроки) — секрета, который "секрет" только пока не
+    #    попал в открыто распространяемый бинарник, не бывает. Отчёт
+    #    (крэш-лог/сохранение/лог отладки) — данные, которые только
+    #    ПРОСМАТРИВАЮТСЯ администратором (см. `/admin/reports/.../view`),
+    #    никогда не исполняются и не раздаются другим игрокам — цена
+    #    злоупотребления анонимной записью сюда несравнимо ниже (спам в
+    #    `_reports/`, видно на дашборде по месту на диске), чем цена
+    #    компрометации токена депо. `MAX_UPLOAD_BYTES` — единственная
+    #    защита от тривиального DoS большим телом запроса.
+    #
+    #    "manager_log"/"manager_crash" (из TESL-Manager — оператор-
+    #    инструмент, не публичный бинарник) — Bearer остаётся, поведение
+    #    не изменилось. ─────────────────────────────────────────────────────
 
     @app.put("/api/reports/<report_type>/<username>/<timestamp>/<filename>")
     def api_reports_upload(report_type, username, timestamp, filename):
-        _require_upload_token()
         if not reports_storage.is_valid_report_type(report_type):
             abort(404, description=f"неизвестный тип отчёта: {report_type}")
+        if report_type not in reports_storage.PUBLIC_REPORT_TYPES:
+            _require_upload_token()
+        if (request.content_length or 0) > reports_storage.MAX_UPLOAD_BYTES:
+            abort(413, description="файл слишком большой")
         try:
             data = request.get_data(cache=False)
+            if len(data) > reports_storage.MAX_UPLOAD_BYTES:
+                abort(413, description="файл слишком большой")
             reports_storage.put_file(report_type, username, timestamp, filename, data)
             return jsonify({"status": "ok", "bytes": len(data)}), 201
         except ReportsUnsafePathError:
