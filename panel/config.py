@@ -14,6 +14,18 @@ import os
 # явно через окружение).
 STORAGE_ROOT = os.environ.get("TESL_PANEL_STORAGE_ROOT", "./data")
 
+# Дополнительные места хранения (2026-09-29, "кластер папок" — см.
+# storage_cluster.py за полную модель) — только СИД для первого запуска
+# (storage_cluster.py::_load_raw() записывает их в
+# <STORAGE_ROOT>/_meta/storage_cluster.json один раз, дальше файл
+# главный, добавлять новые папки — через /admin/settings, не через эту
+# переменную). Через запятую, например
+# "/mnt/1tb-2/tesl-panel,/mnt/2tb-1/tesl-panel". STORAGE_ROOT сам
+# всегда первый член — отдельно перечислять его здесь не нужно.
+EXTRA_STORAGE_ROOTS = [
+    p.strip() for p in os.environ.get("TESL_PANEL_STORAGE_ROOTS", "").split(",") if p.strip()
+]
+
 # Bearer-токен для /api/depot/* (запись/листинг) — тот же принцип, что и
 # DAV_PASSWORD в TESL/TESL-Manager ("не секрет в строгом смысле", встроен в
 # клиентские инструменты, но не публикуется в открытом виде без необходимости).

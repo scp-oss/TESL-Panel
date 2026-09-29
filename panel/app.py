@@ -33,7 +33,8 @@ from flask import (
 
 from . import (
     builds_db, config, depot_view, extras_manifest, github_releases,
-    reports_storage, self_update, storage, system_stats, token_rotate,
+    reports_storage, self_update, storage, storage_cluster, system_stats,
+    token_rotate,
 )
 from .storage import UnsafePathError
 from .reports_storage import UnsafePathError as ReportsUnsafePathError
@@ -168,6 +169,13 @@ def create_app() -> Flask:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         return base64.b64encode(raw).decode("ascii")
 
+    # Общие для всех рендеров settings.html поля про кластер хранения
+    # (см. storage_cluster.py) — фабрика вместо повторения в каждом
+    # из 5 обработчиков ниже, storage_error проставляется только тем,
+    # у кого он реально есть (admin_settings_storage_add).
+    def _storage_ctx(storage_error=None):
+        return {"storage_members": storage_cluster.list_members(), "storage_error": storage_error}
+
     @app.get("/admin/settings")
     @_admin_required
     def admin_settings():
@@ -179,6 +187,7 @@ def create_app() -> Flask:
             update_info=None,
             update_result=None,
             token_result=None,
+            **_storage_ctx(),
         )
 
     @app.post("/admin/settings/check-updates")
@@ -192,6 +201,7 @@ def create_app() -> Flask:
             update_info=self_update.check_for_updates(),
             update_result=None,
             token_result=None,
+            **_storage_ctx(),
         )
 
     @app.post("/admin/settings/apply-update")
@@ -206,6 +216,7 @@ def create_app() -> Flask:
             update_info=None,
             update_result={"ok": ok, "message": msg},
             token_result=None,
+            **_storage_ctx(),
         )
 
     @app.post("/admin/settings/rotate-token")
@@ -225,7 +236,54 @@ def create_app() -> Flask:
             update_info=None,
             update_result=None,
             token_result={"ok": ok, "message": msg, "new_token": new_token},
+            **_storage_ctx(),
         )
+
+    @app.post("/admin/settings/storage/add")
+    @_admin_required
+    def admin_settings_storage_add():
+        """Добавляет папку (обычно на отдельном смонтированном разделе)
+        в кластер хранения — прямой запрос пользователя "добавь
+        возможность добавлять папки ещё". Ничего не переносит, не
+        публикует — только делает путь ДОСТУПНЫМ как место для НОВЫХ
+        сборок (см. storage_cluster.pick_member_for_new_build())."""
+        path = request.form.get("path", "").strip()
+        ok, msg = storage_cluster.add_member(path)
+        return render_template(
+            "settings.html",
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
+            update_info=None,
+            update_result=None,
+            token_result=None,
+            **_storage_ctx(storage_error=None if ok else msg),
+        )
+
+    @app.post("/admin/settings/storage/remove")
+    @_admin_required
+    def admin_settings_storage_remove():
+        path = request.form.get("path", "").strip()
+        ok, msg = storage_cluster.remove_member(path)
+        return render_template(
+            "settings.html",
+            setup_code=_generate_setup_code(),
+            has_token=bool(config.UPLOAD_TOKEN),
+            upload_domain=config.UPLOAD_DOMAIN,
+            update_info=None,
+            update_result=None,
+            token_result=None,
+            **_storage_ctx(storage_error=None if ok else msg),
+        )
+
+    @app.get("/api/storage")
+    def api_storage():
+        # Публичное чтение — свободное место на кластере хранения не
+        # секрет (тот же принцип, что у /api/server-info) — TESL-Manager
+        # показывает это как информационный дисплей рядом с созданием
+        # сборки, ничего не выбирает сам (размещение решает
+        # storage_cluster.pick_member_for_new_build() на сервере).
+        return jsonify({"members": storage_cluster.list_members()})
 
     # ── Admin: страница одной сборки (по ИМЕНИ в URL — человеко-читаемо,
     #    резолвится в build_id внутри обработчика) ──────────────────────────
@@ -242,6 +300,8 @@ def create_app() -> Flask:
             build_id=build["id"],
             depot_meta=storage.get_depot_meta(build["id"]),
             versions=storage.list_version_meta(build["id"]),
+            storage_root=build["storage_root"],
+            storage_usage=system_stats.disk_usage(build["storage_root"]),
             rename_error=None,
         )
 
@@ -260,10 +320,14 @@ def create_app() -> Flask:
                 build_id=build["id"],
                 depot_meta=storage.get_depot_meta(build["id"]),
                 versions=storage.list_version_meta(build["id"]),
+                storage_root=build["storage_root"],
+                storage_usage=system_stats.disk_usage(build["storage_root"]),
                 rename_error=msg,
             ), 400
-        # msg — старое имя при успехе (см. builds_db.rename_build())
-        storage.rename_dir(msg, new_name)
+        # msg — старое имя при успехе (см. builds_db.rename_build());
+        # storage_root — тот же, что уже был у сборки (rename не
+        # переносит её между членами кластера, см. storage.rename_dir()).
+        storage.rename_dir(msg, new_name, build["storage_root"])
         return redirect(url_for("admin_project_detail", name=new_name))
 
     @app.post("/admin/project/<name>/delete")
@@ -279,7 +343,7 @@ def create_app() -> Flask:
         if build is not None:
             deleted = builds_db.delete_build(build["id"])
             if deleted is not None:
-                storage.delete_dir_by_name(deleted["name"])
+                storage.delete_dir_by_name(deleted["name"], deleted["storage_root"])
         return redirect(url_for("admin_page"))
 
     # ── Admin: файловый менеджер сборки (список/просмотр/правка/добавление/
@@ -583,7 +647,7 @@ def create_app() -> Flask:
         _require_upload_token()
         deleted = builds_db.delete_build(build_id)
         if deleted is not None:
-            storage.delete_dir_by_name(deleted["name"])
+            storage.delete_dir_by_name(deleted["name"], deleted["storage_root"])
         return jsonify({"status": "ok", "existed": deleted is not None})
 
     @app.patch("/api/builds/<build_id>")
@@ -594,7 +658,11 @@ def create_app() -> Flask:
         ok, msg = builds_db.rename_build(build_id, new_name)
         if not ok:
             abort(400, description=msg)
-        storage.rename_dir(msg, new_name)  # msg — старое имя при успехе
+        # msg — старое имя при успехе; storage_root не меняется при
+        # переименовании (см. storage.rename_dir()) — читаем его заново
+        # по build_id (имя в БД уже обновлено, id не менялся).
+        build = builds_db.get_build(build_id)
+        storage.rename_dir(msg, new_name, build["storage_root"] if build else None)
         return jsonify({"status": "ok", "id": build_id, "name": new_name})
 
     # ── Файлы сборки — JSON-листинг для десктоп-GUI (Bearer, тот же

@@ -83,7 +83,7 @@ try:
 except ImportError:  # см. докстринг модуля — интерпретатор без _sqlite3
     import pysqlite3 as sqlite3  # noqa: F401  (pysqlite3-binary, requirements.txt)
 
-from . import config
+from . import config, storage_cluster
 
 _lock = threading.Lock()
 
@@ -115,7 +115,31 @@ def _connect() -> sqlite3.Connection:
         " updated_at TEXT NOT NULL"
         ")"
     )
+    # storage_root — какой член кластера хранения (см. storage_cluster.py)
+    # физически держит эту сборку, прямой запрос пользователя 2026-09-29
+    # ("кластер папок... одна папка на одном разделе, другая на другом").
+    # ALTER TABLE ADD COLUMN — единственный способ добавить колонку к уже
+    # существующей таблице в SQLite; идемпотентно через try/except (сам
+    # SQLite не даёт "ADD COLUMN IF NOT EXISTS"). NULL у уже существующих
+    # строк — это НЕ ошибка миграции, это осознанный сигнал "сборка
+    # опубликована до появления кластера, физически лежит в исторически
+    # единственном STORAGE_ROOT" — все читающие функции ниже трактуют
+    # NULL именно так (config.STORAGE_ROOT), не как "неизвестно".
+    try:
+        conn.execute("ALTER TABLE builds ADD COLUMN storage_root TEXT")
+    except sqlite3.OperationalError:
+        pass  # колонка уже есть — обычный случай на каждом вызове после первого
     return conn
+
+
+def _row_to_build(row) -> dict:
+    return {
+        "id": row[0], "name": row[1], "created_at": row[2], "updated_at": row[3],
+        # см. комментарий у ALTER TABLE выше — NULL в БД -> исторический
+        # единственный STORAGE_ROOT, не пустая строка (которая означала бы
+        # "путь не задан" и сломала бы Path(...) резолвинг в storage.py).
+        "storage_root": row[4] or config.STORAGE_ROOT,
+    }
 
 
 def _now() -> str:
@@ -172,12 +196,9 @@ def list_builds() -> List[dict]:
         try:
             _migrate_legacy_if_needed(conn)
             rows = conn.execute(
-                "SELECT id, name, created_at, updated_at FROM builds ORDER BY name"
+                "SELECT id, name, created_at, updated_at, storage_root FROM builds ORDER BY name"
             ).fetchall()
-            return [
-                {"id": r[0], "name": r[1], "created_at": r[2], "updated_at": r[3]}
-                for r in rows
-            ]
+            return [_row_to_build(r) for r in rows]
         finally:
             conn.close()
 
@@ -188,11 +209,11 @@ def get_build(build_id: str) -> Optional[dict]:
         try:
             _migrate_legacy_if_needed(conn)
             row = conn.execute(
-                "SELECT id, name, created_at, updated_at FROM builds WHERE id = ?", (build_id,)
+                "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE id = ?", (build_id,)
             ).fetchone()
             if row is None:
                 return None
-            return {"id": row[0], "name": row[1], "created_at": row[2], "updated_at": row[3]}
+            return _row_to_build(row)
         finally:
             conn.close()
 
@@ -203,11 +224,11 @@ def get_build_by_name(name: str) -> Optional[dict]:
         try:
             _migrate_legacy_if_needed(conn)
             row = conn.execute(
-                "SELECT id, name, created_at, updated_at FROM builds WHERE name = ?", (name,)
+                "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE name = ?", (name,)
             ).fetchone()
             if row is None:
                 return None
-            return {"id": row[0], "name": row[1], "created_at": row[2], "updated_at": row[3]}
+            return _row_to_build(row)
         finally:
             conn.close()
 
@@ -230,17 +251,25 @@ def create_build(name: str) -> "tuple[Optional[dict], str]":
                 # Идемпотентно, тот же принцип, что был у projects.add_project() —
                 # повторное создание уже существующего имени не ошибка.
                 row = conn.execute(
-                    "SELECT id, name, created_at, updated_at FROM builds WHERE name = ?", (name,)
+                    "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE name = ?",
+                    (name,),
                 ).fetchone()
-                return {"id": row[0], "name": row[1], "created_at": row[2], "updated_at": row[3]}, ""
+                return _row_to_build(row), ""
             build_id = uuid.uuid4().hex
             now = _now()
+            # Член кластера хранения выбирается ОДИН РАЗ, здесь, и никогда
+            # не меняется потом — см. storage_cluster.py за полную модель
+            # (вся сборка целиком живёт на одном разделе).
+            storage_root = storage_cluster.pick_member_for_new_build()
             conn.execute(
-                "INSERT INTO builds (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-                (build_id, name, now, now),
+                "INSERT INTO builds (id, name, created_at, updated_at, storage_root) VALUES (?, ?, ?, ?, ?)",
+                (build_id, name, now, now, storage_root),
             )
             conn.commit()
-            return {"id": build_id, "name": name, "created_at": now, "updated_at": now}, ""
+            return {
+                "id": build_id, "name": name, "created_at": now, "updated_at": now,
+                "storage_root": storage_root,
+            }, ""
         finally:
             conn.close()
 
@@ -253,13 +282,13 @@ def delete_build(build_id: str) -> Optional[dict]:
         try:
             _migrate_legacy_if_needed(conn)
             row = conn.execute(
-                "SELECT id, name, created_at, updated_at FROM builds WHERE id = ?", (build_id,)
+                "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE id = ?", (build_id,)
             ).fetchone()
             if row is None:
                 return None
             conn.execute("DELETE FROM builds WHERE id = ?", (build_id,))
             conn.commit()
-            return {"id": row[0], "name": row[1], "created_at": row[2], "updated_at": row[3]}
+            return _row_to_build(row)
         finally:
             conn.close()
 

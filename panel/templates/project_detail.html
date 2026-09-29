@@ -36,6 +36,17 @@
     <dl>
       <dt>id</dt><dd><code>{{ build_id }}</code></dd>
       <dt>Имя</dt><dd>{{ name }}</dd>
+      <dt>Раздел хранения</dt>
+      <dd>
+        <code>{{ storage_root }}</code>
+        {% if storage_usage %}
+          — свободно {{ (storage_usage.free / 1073741824) | round(1) }} ГБ
+          из {{ (storage_usage.total / 1073741824) | round(1) }} ГБ
+          ({{ storage_usage.percent }}% занято)
+        {% else %}
+          — <span style="color: var(--danger);">раздел сейчас недоступен</span>
+        {% endif %}
+      </dd>
     </dl>
     <p style="color: var(--muted); font-size: 0.85rem; margin-top: 10px;">
       Имя используется как папка на диске — переименование физически

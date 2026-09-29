@@ -26,19 +26,33 @@ def _project_root(build_id: str) -> Path:
     id) — переименовывать уже опубликованные деревья чанков без доступа к
     реальному серверу было бы рискованно, см. builds_db.py. build_id —
     единственный аргумент, который принимают функции этого модуля;
-    имя для физического пути резолвится здесь, один раз."""
+    имя для физического пути резолвится здесь, один раз.
+
+    2026-09-29: корень — БОЛЬШЕ НЕ всегда config.STORAGE_ROOT, а
+    build["storage_root"] (см. storage_cluster.py/builds_db.py) — какой
+    конкретно член кластера хранения физически держит эту сборку. Для
+    сборок, опубликованных до появления кластера, storage_root в БД
+    NULL, и builds_db.py::_row_to_build() уже подставляет туда
+    config.STORAGE_ROOT — здесь этого различать не нужно, всегда просто
+    читаем поле."""
     build = builds_db.get_build(build_id)
     if build is None:
         raise ValueError(f"неизвестная сборка: {build_id!r}")
-    return Path(config.STORAGE_ROOT).resolve() / build["name"]
+    return Path(build["storage_root"]).resolve() / build["name"]
 
 
-def _root_by_name(name: str) -> Path:
-    """Для rename_project_dir() — вызывающий (app.py, после успешного
-    builds_db.rename_build()) уже знает и старое, и новое имя напрямую,
-    резолвить их через build_id здесь бессмысленно (новое имя в БД уже
-    записано, старой директории под НОВЫМ именем ещё не существует)."""
-    return Path(config.STORAGE_ROOT).resolve() / name
+def _root_by_name(name: str, storage_root: Optional[str] = None) -> Path:
+    """Для rename_dir()/delete_dir_by_name() — вызывающий (app.py, после
+    успешного builds_db.rename_build()/delete_build()) уже знает имя
+    (и, с 2026-09-29, storage_root — та операция в builds_db уже
+    случилась к этому моменту, так что резолвить заново через build_id
+    либо бессмысленно (rename — новое имя ещё не существует на диске),
+    либо невозможно (delete — строка уже удалена из БД, build_id больше
+    не резолвится вообще), поэтому storage_root передаётся явно тем же
+    вызывающим кодом, который его уже получил из builds_db. None —
+    обратная совместимость со старыми вызовами/тестами, откатывается на
+    исторический config.STORAGE_ROOT."""
+    return Path(storage_root or config.STORAGE_ROOT).resolve() / name
 
 
 def safe_path(build_id: str, rel_path: str) -> Path:
@@ -216,18 +230,21 @@ def delete_file(build_id: str, rel_path: str) -> bool:
     return True
 
 
-def delete_dir_by_name(name: str) -> None:
+def delete_dir_by_name(name: str, storage_root: Optional[str] = None) -> None:
     """Удаляет ВСЁ содержимое сборки с диска, по ИМЕНИ, не по build_id —
     вызывается ПОСЛЕ builds_db.delete_build(build_id) (тот уже вернул имя
     и убрал строку из реестра, так что _project_root(build_id) больше не
     резолвится — отсюда и отдельная by-name версия, не переиспользуем
-    _project_root())."""
-    root = _root_by_name(name)
+    _project_root()). `storage_root` — из того же словаря, что вернул
+    delete_build() (см. builds_db.py::_row_to_build()) — какой член
+    кластера хранения реально держал эту сборку; без него откатывается
+    на исторический config.STORAGE_ROOT (см. _root_by_name())."""
+    root = _root_by_name(name, storage_root)
     if root.exists():
         shutil.rmtree(root)
 
 
-def rename_dir(old_name: str, new_name: str) -> bool:
+def rename_dir(old_name: str, new_name: str, storage_root: Optional[str] = None) -> bool:
     """Физически переименовывает папку сборки на диске — вызывается
     ПОСЛЕ builds_db.rename_build() (та уже проверила конфликт имён и
     обновила БД), здесь просто выполняется сама файловая операция.
@@ -237,9 +254,12 @@ def rename_dir(old_name: str, new_name: str) -> bool:
     случиться при нормальной работе, поскольку builds_db гарантирует
     уникальность имён, но диск может отличаться от БД, если кто-то
     руками что-то трогал — тогда лучше явно отказать, чем молча
-    затереть)."""
-    old_root = _root_by_name(old_name)
-    new_root = _root_by_name(new_name)
+    затереть). Переименование НЕ переносит сборку между членами
+    кластера — old_name/new_name резолвятся на ОДНОМ и том же
+    storage_root (сборка остаётся на том разделе, где была создана,
+    см. storage_cluster.py)."""
+    old_root = _root_by_name(old_name, storage_root)
+    new_root = _root_by_name(new_name, storage_root)
     if not old_root.exists():
         return True
     if new_root.exists():
