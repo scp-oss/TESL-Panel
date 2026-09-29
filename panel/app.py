@@ -298,6 +298,38 @@ def create_app() -> Flask:
         # сборка, не догадка клиента.
         return jsonify({"path": storage_cluster.pick_member_for_new_build()})
 
+    @app.get("/api/depot/<build_id>/storage-check")
+    def api_storage_check(build_id):
+        # Прямой запрос пользователя после реального ENOSPC-инцидента
+        # 2026-09-29 ("после определения файлов и их объёма надо добавить
+        # сверку с свободным местом в кластере") — проверить хватит ли
+        # места на разделе, к которому физически привязана ЭТА сборка,
+        # ДО начала заливки, вместо того чтобы узнавать об этом по факту
+        # оборванного PUT где-то на середине пачки. `bytes` — сколько
+        # байт менеджер реально планирует залить (только новые/
+        # изменившиеся чанки, см. TESL-Manager::chunk_manager.py
+        # compute_upload_bytes() — не весь объём сборки, на уже
+        # существующие переиспользуемые чанки место не нужно).
+        # Публичный (read-only, не секрет — тот же уровень, что у
+        # /api/storage//api/server-info).
+        build = builds_db.get_build(build_id)
+        if build is None:
+            return jsonify({"error": "unknown build"}), 404
+        try:
+            bytes_needed = int(request.args.get("bytes", "0"))
+        except ValueError:
+            return jsonify({"error": "bad bytes param"}), 400
+        usage = system_stats.disk_usage(build["storage_root"])
+        if usage is None:
+            return jsonify({"ok": False, "reachable": False, "path": build["storage_root"]})
+        return jsonify({
+            "ok": usage["free"] >= bytes_needed,
+            "reachable": True,
+            "free": usage["free"],
+            "needed": bytes_needed,
+            "path": build["storage_root"],
+        })
+
     # ── Admin: страница одной сборки (по ИМЕНИ в URL — человеко-читаемо,
     #    резолвится в build_id внутри обработчика) ──────────────────────────
 
