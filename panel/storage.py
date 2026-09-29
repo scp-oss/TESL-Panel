@@ -107,6 +107,65 @@ def list_versions(build_id: str) -> List[str]:
     )
 
 
+def list_version_meta(build_id: str) -> List[dict]:
+    """История версий сборки, самая новая первой (2026-09-29). **Не
+    отдельное хранилище** — TESL-Manager безусловно пишет полный снапшот
+    манифеста в `versions/<build_id>.json` на КАЖДОЙ публикации (и flat-,
+    и packed-протокол — см. `depot_sync_manager.py`, это было в
+    протоколе с самого начала, просто никогда не читалось назад до этой
+    правки). Здесь только читаем и парсим то, что уже реально на диске —
+    `version_key` в возвращаемых словарях это ИМЯ ФАЙЛА без `.json`
+    (= `build_id` того конкретного манифеста, стабильный и уникальный per
+    публикация), не какой-то отдельно изобретённый ключ.
+
+    Файл, который не парсится как JSON (повреждён/не тот формат) —
+    тихо пропускается, не валит всю выборку одним плохим файлом."""
+    versions_dir = safe_path(build_id, "versions")
+    if not versions_dir.is_dir():
+        return []
+    out = []
+    for f in versions_dir.iterdir():
+        if not f.is_file() or f.suffix != ".json":
+            continue
+        try:
+            manifest = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        stats = manifest.get("stats") or {}
+        out.append({
+            "version_key": f.stem,
+            "build_number": manifest.get("build_number"),
+            "build_id": manifest.get("build_id") or f.stem,
+            "description": manifest.get("description") or "",
+            "created_at": manifest.get("created_at") or "",
+            "file_count": stats.get("file_count") or 0,
+            "total_size": stats.get("total_size") or 0,
+        })
+    # По build_number (растёт монотонно на реальных публикациях, см.
+    # depot_sync_manager.py: prev_manifest.build_number + 1) — надёжнее,
+    # чем сортировка по имени файла (build_id — случайный hex, алфавитный
+    # порядок ничего не значит) или по created_at (системные часы двух
+    # публикаций могут не быть строго монотонны). None — в конец.
+    out.sort(key=lambda v: (v["build_number"] is None, v["build_number"] or 0), reverse=True)
+    return out
+
+
+def prune_versions(build_id: str, keep_n: int) -> List[dict]:
+    """Удаляет с диска versions/<build_id>.json сверх keep_n самых новых
+    (прямой запрос пользователя 2026-09-29: "последние N версий", не
+    "хранить всё навсегда") — TESL-Manager сам никогда не чистит старые
+    снапшоты (пишет только новые), поэтому эта чистка — единственное
+    место, где действует лимит. Паки/чанки НЕ трогаются — они уже
+    cumulative и общие между версиями (см. TESL-Manager/CLAUDE.md
+    "Критический баг: повторная публикация перезаписывала pack-файлы"),
+    пруним только маленькие json-снапшоты. Возвращает удалённые записи."""
+    versions = list_version_meta(build_id)
+    stale = versions[max(keep_n, 0):]
+    for v in stale:
+        delete_file(build_id, f"versions/{v['version_key']}.json")
+    return stale
+
+
 def get_depot_meta(build_id: str) -> Optional[dict]:
     """depot.json, разобранный — если публикаций ещё не было, файла нет,
     возвращаем None (не ошибка, обычное состояние свежедобавленной

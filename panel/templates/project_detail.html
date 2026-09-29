@@ -76,7 +76,12 @@
   <div class="card">
     <h2>Версии ({{ versions | length }})</h2>
     {% if versions %}
-      <ul>{% for v in versions %}<li>{{ v }}</li>{% endfor %}</ul>
+      <ul>{% for v in versions %}<li>
+        build #{{ v.build_number if v.build_number is not none else '?' }}
+        <span style="color: var(--muted);">— {{ v.created_at or '?' }} — {{ v.file_count }} файлов, {{ v.total_size }} байт</span>
+        {% if v.description %}<br><span style="color: var(--muted); font-size: 0.85rem;">{{ v.description }}</span>{% endif %}
+        <br><code style="font-size: 0.8rem;">{{ v.version_key }}</code>
+      </li>{% endfor %}</ul>
     {% else %}
       <p style="color: var(--muted);">Пусто.</p>
     {% endif %}

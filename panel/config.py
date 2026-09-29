@@ -101,3 +101,16 @@ else:
 _UPLOAD_DOMAIN_ENV = os.environ.get("TESL_PANEL_UPLOAD_DOMAIN", "").strip()
 UPLOAD_DOMAIN = _UPLOAD_DOMAIN_ENV
 UPLOAD_BASE_URL = f"https://{_UPLOAD_DOMAIN_ENV}" if _UPLOAD_DOMAIN_ENV else PUBLIC_BASE_URL
+
+# История версий сборки (2026-09-29, прямой запрос — "версионность папки
+# для заливки и последующий откат с лаунчера на выбранную сборку"). Панель
+# ничего не создаёт сама — TESL-Manager уже безусловно пишет полный
+# снапшот манифеста в versions/<build_id>.json на КАЖДОЙ публикации (см.
+# depot_sync_manager.py, было в протоколе с самого начала); эта константа
+# только про ЧИСТКУ (storage.py::prune_versions(), вызывается после
+# каждого PUT внутрь versions/ — см. app.py) — прямой ответ пользователя на
+# вопрос "сколько версий хранить" — "последние N", не "все навсегда".
+# Паки/чанки не затрагиваются — они уже cumulative между публикациями
+# (см. TESL-Manager's CLAUDE.md "Критический баг: повторная публикация
+# перезаписывала pack-файлы"), пруним только маленькие json-снапшоты.
+KEEP_VERSIONS = int(os.environ.get("TESL_PANEL_KEEP_VERSIONS", "10"))

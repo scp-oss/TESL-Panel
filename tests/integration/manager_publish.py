@@ -29,6 +29,8 @@ import os
 import pathlib
 import sys
 
+import requests
+
 PANEL_BASE_URL, TOKEN, SRC_DIR, OUT_JSON = sys.argv[1:5]
 
 MANAGER_DIR = os.environ["TESL_MANAGER_SRC_DIR"]
@@ -103,10 +105,28 @@ def main():
 
     round1_entries = _scan_and_publish(["Skyrim", "MO2p"], {}, sync, cm)
 
+    # Версия раунда 1 (2026-09-29, версионность/откат) — снята панелью
+    # АВТОМАТИЧЕСКИ на PUT depot_manifest.json внутри execute_sync_packed()
+    # выше (см. TESL-Panel::app.py::_maybe_record_version()), без единого
+    # вызова с этой стороны — просто читаем реестр, чтобы знать, на какую
+    # версию потом будет откатываться launcher_verify.py.
+    r_versions_1 = requests.get(f"{PANEL_BASE_URL}/api/depot/{build_id}/versions", timeout=10)
+    r_versions_1.raise_for_status()
+    versions_after_round1 = r_versions_1.json()["versions"]
+    if len(versions_after_round1) != 1:
+        raise RuntimeError(f"после раунда 1 ожидалась ровно 1 версия в истории, получено {len(versions_after_round1)}")
+    round1_version_key = versions_after_round1[0]["version_key"]
+
     # ── Раунд 2 — добавляем файлы, Skyrim.esm/Update.esm/MO2p НЕ трогаем ──
     _write("MO2p/mods/SomeMod/plugin.esp", os.urandom(150_000))
     _write("MO2p/mods/SomeMod/textures/tex1.dds", os.urandom(200_000))
     round2_entries = _scan_and_publish(["Skyrim", "MO2p"], round1_entries, sync, cm)
+
+    r_versions_2 = requests.get(f"{PANEL_BASE_URL}/api/depot/{build_id}/versions", timeout=10)
+    r_versions_2.raise_for_status()
+    versions_after_round2 = r_versions_2.json()["versions"]
+    if len(versions_after_round2) != 2:
+        raise RuntimeError(f"после раунда 2 ожидалось 2 версии в истории, получено {len(versions_after_round2)}")
 
     if round2_entries[untouched_path].file_hash != round1_entries[untouched_path].file_hash:
         raise RuntimeError("тестовая ошибка: 'нетронутый' файл раунда 1 внезапно изменился")
@@ -136,6 +156,13 @@ def main():
         "src_dir": str(src),
         "untouched_path": untouched_path,
         "poster_sha256": __import__("hashlib").sha256(poster_bytes).hexdigest(),
+        # Версионность/откат (2026-09-29) — round1_version_key: старая
+        # версия, на которую launcher_verify.py должен уметь откатиться;
+        # round2_only_path: файл, которого в НЕЙ быть не должно (появился
+        # только в раунде 2) — прямая проверка, что откат реально ставит
+        # СТАРЫЙ манифест, а не просто произвольный валидный набор файлов.
+        "round1_version_key": round1_version_key,
+        "round2_only_path": "MO2p/mods/SomeMod/plugin.esp",
     }
     pathlib.Path(OUT_JSON).write_text(json.dumps(result), encoding="utf-8")
     print("MANAGER_PUBLISH_OK", json.dumps(result))

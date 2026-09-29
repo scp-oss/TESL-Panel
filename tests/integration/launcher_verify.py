@@ -46,6 +46,8 @@ info = json.loads(pathlib.Path(IN_JSON).read_text(encoding="utf-8"))
 build_id = info["build_id"]
 src_dir = pathlib.Path(info["src_dir"])
 untouched_path = info["untouched_path"]
+round1_version_key = info["round1_version_key"]
+round2_only_path = info["round2_only_path"]
 
 import config as launcher_config  # noqa: E402
 launcher_config.PANEL_BASE_URL = PANEL_BASE_URL
@@ -98,6 +100,43 @@ try:
         if untouched_path not in {e.path for e in entries}:
             fail(f"untouched_path {untouched_path!r} не найден в манифесте вообще")
         result["files_checked"] = checked
+
+        # ── Откат на историческую версию (2026-09-29) ──────────────────
+        # Прямая регрессия на "версионность + откат из лаунчера": список
+        # версий реально содержит ≥2 записи (см. manager_publish.py — два
+        # раунда), а установка ПО version_key раунда 1 реально ставит
+        # набор файлов раунда 1 — без round2_only_path, с тем же
+        # untouched_path. Тот же ChunkInstaller/PanelDepotClient, что и
+        # выше — единственная разница — version_key передан явно.
+        versions = client.list_versions()
+        if len(versions) < 2:
+            fail(f"откат: ожидалось ≥2 версии в истории, получено {len(versions)}")
+        version_keys = {v["version_key"] for v in versions}
+        if round1_version_key not in version_keys:
+            fail(f"откат: version_key раунда 1 ({round1_version_key}) не найден в списке версий панели: {version_keys}")
+        else:
+            rollback_loaded = _load_panel_manifest(client, round1_version_key)
+            if rollback_loaded is None:
+                fail(f"откат: _load_panel_manifest(version_key={round1_version_key!r}) вернул None")
+            else:
+                rollback_entries, _rollback_meta = rollback_loaded
+                rollback_paths = {e.path for e in rollback_entries}
+                if round2_only_path in rollback_paths:
+                    fail(f"откат: манифест версии раунда 1 содержит файл раунда 2 ({round2_only_path}) — версии не различаются")
+                if untouched_path not in rollback_paths:
+                    fail(f"откат: манифест версии раунда 1 не содержит собственный файл раунда 1 ({untouched_path})")
+                rollback_dir = pathlib.Path(tempfile.mkdtemp(prefix="tesl_e2e_rollback_"))
+                rollback_installer = ChunkInstaller(client=client, local_dir=rollback_dir, max_workers=8)
+                rollback_ok = rollback_installer.install(rollback_entries)
+                if not rollback_ok:
+                    fail("откат: ChunkInstaller.install() для версии раунда 1 вернул False")
+                rollback_error_summary = client.chunk_error_summary()
+                if rollback_error_summary:
+                    fail(f"откат: chunk_error_summary НЕ пуст после установки версии раунда 1: {rollback_error_summary}")
+                if (rollback_dir / round2_only_path).exists():
+                    fail(f"откат: файл раунда 2 физически появился на диске после установки версии раунда 1 ({round2_only_path})")
+                if not (rollback_dir / untouched_path).is_file():
+                    fail(f"откат: собственный файл раунда 1 не установился ({untouched_path})")
 
     extras = client.fetch_extras_manifest()
     if not any(d["path"] == "documents/Skyrim.ini" and d["enabled"] for d in extras.get("documents", [])):

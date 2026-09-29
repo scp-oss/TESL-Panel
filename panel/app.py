@@ -241,7 +241,7 @@ def create_app() -> Flask:
             name=name,
             build_id=build["id"],
             depot_meta=storage.get_depot_meta(build["id"]),
-            versions=storage.list_versions(build["id"]),
+            versions=storage.list_version_meta(build["id"]),
             rename_error=None,
         )
 
@@ -259,7 +259,7 @@ def create_app() -> Flask:
                 name=name,
                 build_id=build["id"],
                 depot_meta=storage.get_depot_meta(build["id"]),
-                versions=storage.list_versions(build["id"]),
+                versions=storage.list_version_meta(build["id"]),
                 rename_error=msg,
             ), 400
         # msg — старое имя при успехе (см. builds_db.rename_build())
@@ -617,6 +617,29 @@ def create_app() -> Flask:
         if not builds_db.is_allowed(build_id):
             abort(404, description=f"неизвестная сборка: {build_id}")
 
+    def _maybe_prune_versions(build_id: str) -> None:
+        """Вызывается после КАЖДОГО PUT внутрь versions/ (2026-09-29) —
+        **не создаёт снапшот сама**, TESL-Manager уже безусловно пишет
+        `versions/<build_id>.json` на каждой публикации своим кодом
+        (`depot_sync_manager.py` — и flat-, и packed-путь, строки с
+        `self._rp(VERSIONS_DIR, f"{new_manifest.build_id}.json")`, есть с
+        самого начала протокола, задолго до этой правки — см.
+        `storage.list_versions()`'s собственный докстринг, тот уже
+        предполагал чтение этой папки). Единственное, чего не было —
+        (а) публичного эндпоинта отдать эту историю лаунчеру и
+        (б) чистки старых снапшотов, раз клиент сам никогда не удаляет
+        предыдущие — эта функция только про (б).
+
+        Best-effort — ошибка здесь не должна валить сам PUT, публикация
+        уже состоялась, чистка старой истории — бухгалтерия сверху."""
+        try:
+            storage.prune_versions(build_id, config.KEEP_VERSIONS)
+        except Exception:
+            app.logger.exception(
+                "не удалось почистить старые версии для build_id=%s (сама публикация не затронута)",
+                build_id,
+            )
+
     @app.get("/api/depot/<build_id>/test")
     def depot_test(build_id):
         _check_build(build_id)
@@ -627,6 +650,32 @@ def create_app() -> Flask:
         _check_build(build_id)
         try:
             return jsonify({"chunk_ids": storage.list_chunk_ids(build_id)})
+        except UnsafePathError:
+            abort(400)
+
+    @app.get("/api/depot/<build_id>/versions")
+    def depot_list_versions(build_id):
+        """История версий этой сборки (2026-09-29) — публичное чтение, тот
+        же принцип, что и у /chunks выше: список того, что есть, не сам
+        контент.
+
+        **Не отдельная база — читает те же `versions/<build_id>.json`
+        файлы, что TESL-Manager безусловно пишет на КАЖДОЙ публикации
+        уже давно** (см. `depot_sync_manager.py`, было там до этой
+        правки — просто никогда не читалось назад). `storage.
+        list_version_meta()` парсит каждый файл (build_number/
+        description/created_at) для сортировки и отображения —
+        `version_key` в ответе это buквально имя файла без `.json`
+        (= `build_id` манифеста), реальный, стабильный ключ.
+
+        Лаунчер использует это для отката — см. core/panel_client.py::
+        PanelDepotClient.list_versions()/fetch_manifest(version_key=...)
+        в TESL-репозитории; сам снапшот манифеста версии читается обычным
+        GET .../versions/<key>.json через уже существующий depot_object
+        ниже, отдельного эндпоинта под это не нужно."""
+        _check_build(build_id)
+        try:
+            return jsonify({"versions": storage.list_version_meta(build_id)})
         except UnsafePathError:
             abort(400)
 
@@ -648,6 +697,8 @@ def create_app() -> Flask:
                 _require_upload_token()
                 data = request.get_data(cache=False)
                 storage.put_bytes(build_id, rel_path, data)
+                if rel_path.startswith("versions/") and rel_path.endswith(".json"):
+                    _maybe_prune_versions(build_id)
                 return jsonify({"status": "ok", "bytes": len(data)}), 201
 
             # GET/HEAD — публичное чтение, токен не нужен. send_file(...,
