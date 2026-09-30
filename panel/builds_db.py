@@ -76,7 +76,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 try:
     import sqlite3
@@ -86,6 +86,47 @@ except ImportError:  # см. докстринг модуля — интерпр�
 from . import config, storage_cluster
 
 _lock = threading.Lock()
+
+# ── Процесс-локальный кэш ────────────────────────────────────────────────────
+# Живой инцидент 2026-09-30: `get_build()` вызывается на САМОМ горячем
+# пути этого приложения — `_check_build()` в `app.py` дёргает его на
+# КАЖДЫЙ GET/HEAD/PUT/DELETE чанка/пака (потенциально сотни тысяч раз за
+# одну установку), и до этой правки каждый такой вызов открывал НОВОЕ
+# SQLite-соединение (`_connect()` — плюс `CREATE TABLE IF NOT EXISTS` и
+# пробный `ALTER TABLE ADD COLUMN`, каждый раз заново), гонял
+# `_migrate_legacy_if_needed()`'s `SELECT COUNT(*)`, саму реальную
+# SELECT-выборку — и ВСЁ это под одним общим `threading.Lock()`,
+# сериализующим ВСЕ потоки одного gunicorn-воркера. Под 24+ параллельными
+# запросами лаунчера (`CHUNK_MAX_WORKERS`) это создавало катастрофическую
+# очередь: реальная передача байт файла (быстрая) тонула в ожидании
+# лока на тривиальную проверку "существует ли эта сборка". Подтверждено
+# живьём: один поток `curl` без этой перегрузки скачал файл за 16с на
+# 1.75 МБ/с, а те же 24 потока через лаунчер еле ползли на единицы КБ/с.
+#
+# Кэш — простой словарь build_id -> запись, заполняется целиком при
+# первом обращении в этом процессе, дальше `get_build()` на КЭШ-ХИТЕ
+# (подавляющее большинство вызовов — один и тот же build_id тысячи раз
+# подряд за установку) не трогает SQLite/lock вообще. Промах кэша (id
+# ещё не видели В ЭТОМ процессе, либо сборка реально не существует) —
+# один настоящий поход в БД, с записью результата в кэш.
+#
+# Мутирующие функции (create_build/delete_build/rename_build/
+# set_storage_root) обновляют кэш ТОЧЕЧНО сами, в момент записи —
+# единственный писатель в рамках одного процесса, кэш никогда не
+# расходится с реальностью для мутаций ЭТОГО ЖЕ процесса.
+#
+# **Явная граница, не скрытая**: при `--workers 2` (см. `infra/
+# tesl-panel.service.template`) это ДВА отдельных ОС-процесса, кэш
+# каждого не расшарен с другим — если сборку создали/переименовали/
+# удалили через ОДИН воркер, а запрос на чтение попал на ДРУГОЙ, который
+# уже успел закэшировать старое состояние (create/rename — промах на
+# новый id всё равно уйдёт в реальную БД и найдёт актуальные данные;
+# delete/rename СТАРОГО имени — окно до перезапуска процесса, когда
+# другой воркер ещё не знает об изменении). Для одного оператора с редкими
+# мутациями (создание/переименование/удаление сборок — не поток
+# чанков) это приемлемый компромисс — а не незамеченный риск.
+_build_cache: Dict[str, dict] = {}
+_migrated = False   # процесс уже прогонял _migrate_legacy_if_needed() хоть раз
 
 # Тот же паттерн, что был у старого projects.py::_PROJECT_NAME_RE —
 # буквы/цифры/подчёркивание/дефис, используется как сегмент файлового
@@ -186,49 +227,91 @@ def _migrate_legacy_if_needed(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _ensure_migrated(conn: sqlite3.Connection) -> None:
+    """`_migrate_legacy_if_needed()` — тот же самый идемпотентный
+    результат при повторном вызове, но `SELECT COUNT(*)` внутри нет
+    смысла гонять на каждое обращение — гейтим процесс-локальным флагом,
+    один раз за жизнь процесса достаточно (см. докстринг `_build_cache`
+    выше за полную причину этой правки)."""
+    global _migrated
+    if _migrated:
+        return
+    _migrate_legacy_if_needed(conn)
+    _migrated = True
+
+
 def is_valid_name(name: str) -> bool:
     return bool(_NAME_RE.match(name))
 
 
 def list_builds() -> List[dict]:
-    with _lock:
-        conn = _connect()
-        try:
-            _migrate_legacy_if_needed(conn)
-            rows = conn.execute(
-                "SELECT id, name, created_at, updated_at, storage_root FROM builds ORDER BY name"
-            ).fetchall()
-            return [_row_to_build(r) for r in rows]
-        finally:
-            conn.close()
+    # Не самый горячий путь (админка/GUI-менеджер, не поток чанков), но
+    # раз кэш уже есть — раз в него смотреть, чем каждый раз ходить в
+    # SQLite; промах (кэш ещё не прогрет в этом процессе) — обычный
+    # поход в БД, как и раньше, с последующим прогревом кэша.
+    if not _build_cache:
+        with _lock:
+            conn = _connect()
+            try:
+                _ensure_migrated(conn)
+                rows = conn.execute(
+                    "SELECT id, name, created_at, updated_at, storage_root FROM builds"
+                ).fetchall()
+                for r in rows:
+                    b = _row_to_build(r)
+                    _build_cache[b["id"]] = b
+            finally:
+                conn.close()
+    return sorted(_build_cache.values(), key=lambda b: b["name"])
 
 
 def get_build(build_id: str) -> Optional[dict]:
+    # САМЫЙ горячий вызов в этом модуле — см. докстринг `_build_cache`
+    # выше за живой инцидент, из-за которого эта функция вообще
+    # переписана. Кэш-хит — просто чтение словаря, без `_lock`/SQLite.
+    cached = _build_cache.get(build_id)
+    if cached is not None:
+        return cached
+    # Промах — либо сборки правда нет, либо она создана/переименована
+    # ДРУГИМ gunicorn-воркером уже после того, как этот процесс в
+    # последний раз видел её (см. докстринг `_build_cache` про границу
+    # между процессами) — настоящий поход в SQLite только здесь, не на
+    # каждый вызов.
     with _lock:
         conn = _connect()
         try:
-            _migrate_legacy_if_needed(conn)
+            _ensure_migrated(conn)
             row = conn.execute(
                 "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE id = ?", (build_id,)
             ).fetchone()
             if row is None:
                 return None
-            return _row_to_build(row)
+            b = _row_to_build(row)
+            _build_cache[build_id] = b
+            return b
         finally:
             conn.close()
 
 
 def get_build_by_name(name: str) -> Optional[dict]:
+    # Не на пути чанков (используется /admin по имени в URL) — но раз
+    # кэш уже тёплый в большинстве случаев, дешевле сначала посмотреть в
+    # него, чем сразу идти в SQLite.
+    for b in _build_cache.values():
+        if b["name"] == name:
+            return b
     with _lock:
         conn = _connect()
         try:
-            _migrate_legacy_if_needed(conn)
+            _ensure_migrated(conn)
             row = conn.execute(
                 "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE name = ?", (name,)
             ).fetchone()
             if row is None:
                 return None
-            return _row_to_build(row)
+            b = _row_to_build(row)
+            _build_cache[b["id"]] = b
+            return b
         finally:
             conn.close()
 
@@ -245,7 +328,7 @@ def create_build(name: str) -> "tuple[Optional[dict], str]":
     with _lock:
         conn = _connect()
         try:
-            _migrate_legacy_if_needed(conn)
+            _ensure_migrated(conn)
             existing = conn.execute("SELECT id FROM builds WHERE name = ?", (name,)).fetchone()
             if existing:
                 # Идемпотентно, тот же принцип, что был у projects.add_project() —
@@ -254,7 +337,9 @@ def create_build(name: str) -> "tuple[Optional[dict], str]":
                     "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE name = ?",
                     (name,),
                 ).fetchone()
-                return _row_to_build(row), ""
+                b = _row_to_build(row)
+                _build_cache[b["id"]] = b
+                return b, ""
             build_id = uuid.uuid4().hex
             now = _now()
             # Член кластера хранения выбирается ОДИН РАЗ, здесь, и никогда
@@ -266,10 +351,12 @@ def create_build(name: str) -> "tuple[Optional[dict], str]":
                 (build_id, name, now, now, storage_root),
             )
             conn.commit()
-            return {
+            b = {
                 "id": build_id, "name": name, "created_at": now, "updated_at": now,
                 "storage_root": storage_root,
-            }, ""
+            }
+            _build_cache[build_id] = b
+            return b, ""
         finally:
             conn.close()
 
@@ -294,6 +381,9 @@ def set_storage_root(build_id: str, new_root: str) -> None:
             conn.commit()
         finally:
             conn.close()
+    cached = _build_cache.get(build_id)
+    if cached is not None:
+        cached["storage_root"] = new_root
 
 
 def delete_build(build_id: str) -> Optional[dict]:
@@ -302,7 +392,7 @@ def delete_build(build_id: str) -> Optional[dict]:
     with _lock:
         conn = _connect()
         try:
-            _migrate_legacy_if_needed(conn)
+            _ensure_migrated(conn)
             row = conn.execute(
                 "SELECT id, name, created_at, updated_at, storage_root FROM builds WHERE id = ?", (build_id,)
             ).fetchone()
@@ -310,7 +400,9 @@ def delete_build(build_id: str) -> Optional[dict]:
                 return None
             conn.execute("DELETE FROM builds WHERE id = ?", (build_id,))
             conn.commit()
-            return _row_to_build(row)
+            b = _row_to_build(row)
+            _build_cache.pop(build_id, None)
+            return b
         finally:
             conn.close()
 
@@ -327,7 +419,7 @@ def rename_build(build_id: str, new_name: str) -> "tuple[bool, str]":
     with _lock:
         conn = _connect()
         try:
-            _migrate_legacy_if_needed(conn)
+            _ensure_migrated(conn)
             row = conn.execute("SELECT name FROM builds WHERE id = ?", (build_id,)).fetchone()
             if row is None:
                 return False, "сборка не найдена"
@@ -342,6 +434,9 @@ def rename_build(build_id: str, new_name: str) -> "tuple[bool, str]":
                 (new_name, _now(), build_id),
             )
             conn.commit()
+            cached = _build_cache.get(build_id)
+            if cached is not None:
+                cached["name"] = new_name
             return True, old_name
         finally:
             conn.close()
