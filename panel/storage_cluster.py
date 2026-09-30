@@ -148,6 +148,44 @@ def remove_member(path: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def has_any_content(storage_root: str, name: str) -> bool:
+    """Есть ли у сборки (`storage_root`/`name`) уже хоть один физический
+    файл на диске — единственная проверка, нужная
+    `pick_member_with_capacity()`'s вызывающему коду (`app.py::
+    api_ensure_capacity`), чтобы не переставить `storage_root` у сборки,
+    для которой это молча ОСИРОТИЛО бы уже опубликованные данные (см. её
+    докстринг за полное обоснование). Дешёвая проверка — первый
+    попавшийся файл через `rglob`, не полный обход/подсчёт размера всего
+    дерева (в отличие от более ранней, откаченной версии этой фичи с
+    полноценной копией существующих данных — см. CLAUDE.md, "нет
+    опубликованных сборок, миграцию можно не писать")."""
+    root = Path(storage_root).resolve() / name
+    if not root.is_dir():
+        return False
+    for f in root.rglob("*"):
+        if f.is_file():
+            return True
+    return False
+
+
+def pick_member_with_capacity(bytes_needed: int, exclude: Optional[str] = None) -> Optional[str]:
+    """Член кластера (кроме `exclude`, если задан) с достаточным
+    свободным местом под `bytes_needed` — прямой запрос пользователя
+    2026-09-29 ("считает объём заливки и автоматически выбирает
+    подходящий кластер, если нет подходящего — пишет нет подходящего").
+    Среди подходящих (`free >= bytes_needed`) берёт максимум свободного
+    места, тот же тай-брейк, что и `pick_member_for_new_build()` ниже.
+    `None`, если ни один достижимый член не подходит."""
+    members = list_members()
+    qualifying = [
+        m for m in members
+        if m["reachable"] and m["path"] != exclude and m["free"] >= bytes_needed
+    ]
+    if not qualifying:
+        return None
+    return max(qualifying, key=lambda m: m["free"])["path"]
+
+
 def pick_member_for_new_build() -> str:
     """Куда положить НОВУЮ сборку — прямая цитата пользователя: "какая
     разница где хранить чанки". Политика: член с БОЛЬШИМ количеством

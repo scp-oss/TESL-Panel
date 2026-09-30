@@ -33,8 +33,8 @@ from flask import (
 
 from . import (
     builds_db, config, depot_view, extras_manifest, github_releases,
-    reports_storage, self_update, storage, storage_cluster, system_stats,
-    token_rotate,
+    reports_storage, self_update, storage, storage_cluster,
+    system_stats, token_rotate,
 )
 from .storage import UnsafePathError
 from .reports_storage import UnsafePathError as ReportsUnsafePathError
@@ -298,37 +298,50 @@ def create_app() -> Flask:
         # сборка, не догадка клиента.
         return jsonify({"path": storage_cluster.pick_member_for_new_build()})
 
-    @app.get("/api/depot/<build_id>/storage-check")
-    def api_storage_check(build_id):
-        # Прямой запрос пользователя после реального ENOSPC-инцидента
-        # 2026-09-29 ("после определения файлов и их объёма надо добавить
-        # сверку с свободным местом в кластере") — проверить хватит ли
-        # места на разделе, к которому физически привязана ЭТА сборка,
-        # ДО начала заливки, вместо того чтобы узнавать об этом по факту
-        # оборванного PUT где-то на середине пачки. `bytes` — сколько
-        # байт менеджер реально планирует залить (только новые/
-        # изменившиеся чанки, см. TESL-Manager::chunk_manager.py
-        # compute_upload_bytes() — не весь объём сборки, на уже
-        # существующие переиспользуемые чанки место не нужно).
-        # Публичный (read-only, не секрет — тот же уровень, что у
-        # /api/storage//api/server-info).
-        build = builds_db.get_build(build_id)
-        if build is None:
-            return jsonify({"error": "unknown build"}), 404
+    @app.post("/api/depot/<build_id>/ensure-capacity")
+    def api_ensure_capacity(build_id):
+        # Прямой запрос пользователя 2026-09-29: "считает объём заливки
+        # и автоматически выбирает подходящий кластер, если нет
+        # подходящего — пишет нет подходящего". Изначально спроектирован
+        # с фоновым переносом уже опубликованных данных между членами
+        # кластера — откачено тем же вечером по прямому указанию
+        # пользователя ("миграцию можешь не писать, потому что сборок
+        # залитых нет, а всё что было — тестовое"): раз копировать
+        # реально нечего, простое переключение указателя `storage_root`
+        # без единого байта физического переноса — вся нужная сегодня
+        # функциональность, без риска и сложности фоновых потоков/copy+
+        # verify+delete. См. `storage_cluster.has_any_content()`'s
+        # докстринг за то, почему это переключение остаётся safe даже
+        # если однажды на диске ВСЁ ЖЕ окажутся реальные данные — тогда
+        # оно просто откажется переставлять указатель, а не осиротит их.
+        #
+        # Bearer, не публичный (в отличие от /api/storage/next) — это
+        # мутирующая операция (может записать новый storage_root в БД).
+        _check_build(build_id)
+        _require_upload_token()
         try:
             bytes_needed = int(request.args.get("bytes", "0"))
         except ValueError:
             return jsonify({"error": "bad bytes param"}), 400
+
+        build = builds_db.get_build(build_id)
         usage = system_stats.disk_usage(build["storage_root"])
-        if usage is None:
-            return jsonify({"ok": False, "reachable": False, "path": build["storage_root"]})
-        return jsonify({
-            "ok": usage["free"] >= bytes_needed,
-            "reachable": True,
-            "free": usage["free"],
-            "needed": bytes_needed,
-            "path": build["storage_root"],
-        })
+        if usage is not None and usage["free"] >= bytes_needed:
+            return jsonify({"ok": True, "path": build["storage_root"]})
+
+        # Текущему разделу не хватает — если у сборки там уже есть
+        # реальные данные, переключать storage_root было бы ОПАСНО (они
+        # физически остались бы на старом месте, невидимые новому коду) —
+        # в этом случае просто отказываем, как и раньше (человек решает
+        # сам — расширить кластер/освободить место/перенести вручную).
+        if storage_cluster.has_any_content(build["storage_root"], build["name"]):
+            return jsonify({"ok": False, "no_capacity": True}), 507
+
+        alt = storage_cluster.pick_member_with_capacity(bytes_needed, exclude=build["storage_root"])
+        if alt is None:
+            return jsonify({"ok": False, "no_capacity": True}), 507
+        builds_db.set_storage_root(build_id, alt)
+        return jsonify({"ok": True, "path": alt, "reassigned": True})
 
     # ── Admin: страница одной сборки (по ИМЕНИ в URL — человеко-читаемо,
     #    резолвится в build_id внутри обработчика) ──────────────────────────

@@ -274,6 +274,28 @@ def create_build(name: str) -> "tuple[Optional[dict], str]":
             conn.close()
 
 
+def set_storage_root(build_id: str, new_root: str) -> None:
+    """Переключает сборку на другой член кластера хранения — вызывается
+    ТОЛЬКО panel/migration.py, и ТОЛЬКО после того, как содержимое уже
+    физически скопировано на новое место и проверено (см. её докстринг)
+    — эта функция сама ничего на диске не трогает, чистая запись в БД.
+    Прямой запрос пользователя 2026-09-29 ("автоматически выбирает
+    подходящий кластер... всегда, включая уже опубликованные сборки") —
+    единственное место, которое меняет storage_root ПОСЛЕ создания
+    сборки (create_build() — единственное другое место, что его пишет,
+    и только один раз, при INSERT)."""
+    with _lock:
+        conn = _connect()
+        try:
+            conn.execute(
+                "UPDATE builds SET storage_root = ?, updated_at = ? WHERE id = ?",
+                (new_root, _now(), build_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def delete_build(build_id: str) -> Optional[dict]:
     """Возвращает удалённую запись (чтобы вызывающий знал имя — для
     удаления папки на диске) или None, если такого id не было."""
