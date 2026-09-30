@@ -12,9 +12,24 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import builds_db, config
+
+# Живой инцидент 2026-09-30 (тот же день, что и кэш `builds_db.get_build()`
+# — см. её CLAUDE.md): `_project_root()` вызывает `Path(...).resolve()` —
+# реальный syscall (stat/readlink на каждый компонент пути), на КАЖДЫЙ
+# запрос чанка/пака, хотя результат для ОДНОГО build_id не меняется между
+# запросами (storage_root/name сборки не скачут от запроса к запросу).
+# Под 24+ параллельными GET-запросами лаунчера эти "дешёвые" metadata-
+# операции вставали в ту же очередь к диску, что и сами данные (см.
+# iostat в диагностике того дня — %util=100 даже на чтении, где реальных
+# байт файла ещё не было). Кэш ключуется по (storage_root, name), не по
+# build_id — если сборку переименовали/перенесли на другой член кластера
+# (`rename_build()`/`set_storage_root()` в builds_db.py), ключ сам
+# меняется, старая запись просто становится неиспользуемой (не даёт
+# устаревший путь), без явной инвалидации.
+_root_cache: Dict[Tuple[str, str], Path] = {}
 
 
 class UnsafePathError(ValueError):
@@ -38,7 +53,13 @@ def _project_root(build_id: str) -> Path:
     build = builds_db.get_build(build_id)
     if build is None:
         raise ValueError(f"неизвестная сборка: {build_id!r}")
-    return Path(build["storage_root"]).resolve() / build["name"]
+    key = (build["storage_root"], build["name"])
+    cached = _root_cache.get(key)
+    if cached is not None:
+        return cached
+    resolved = Path(build["storage_root"]).resolve() / build["name"]
+    _root_cache[key] = resolved
+    return resolved
 
 
 def _root_by_name(name: str, storage_root: Optional[str] = None) -> Path:
