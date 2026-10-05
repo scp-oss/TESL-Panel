@@ -1038,7 +1038,12 @@ def create_app() -> Flask:
     @app.get("/admin/dashboard")
     @_admin_required
     def admin_dashboard():
-        return render_template("dashboard.html", disks=system_stats.list_disks())
+        cluster = storage_cluster.list_members()
+        next_build_path = storage_cluster.pick_member_for_new_build()
+        return render_template(
+            "dashboard.html", disks=system_stats.list_disks(),
+            cluster=cluster, next_build_path=next_build_path,
+        )
 
     @app.get("/admin/dashboard/stats")
     @_admin_required
@@ -1048,11 +1053,25 @@ def create_app() -> Flask:
         if disk is None:
             disks = system_stats.list_disks()
             disk = disks[0] if disks else None
+
+        # Кластер хранения — прямой запрос "пусть там отображаются
+        # статусы кластеров и нагрузка на них в графике". io=None для
+        # недостижимого члена (нет смысла резолвить устройство для
+        # пути, который и так not reachable — см. system_stats.member_io())
+        # или если устройство не резолвится (сетевая ФС/tmpfs) — клиент
+        # просто не рисует график для этой карточки, статус места не
+        # затрагивается.
+        cluster = []
+        for m in storage_cluster.list_members():
+            io = system_stats.member_io(m["path"]) if m["reachable"] else None
+            cluster.append({**m, "io": io})
+
         return jsonify({
             "cpu_percent": system_stats.cpu_percent(),
             "memory":      system_stats.memory_stats(),
             "disk":        disk,
             "network":     system_stats.network_counters(),
+            "cluster":     cluster,
         })
 
     return app

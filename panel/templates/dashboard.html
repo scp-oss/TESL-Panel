@@ -90,6 +90,33 @@
     </div>
   </div>
 
+  <div class="card wide">
+    <h2>Кластер хранения</h2>
+    {% if not cluster %}
+      <div class="stat-sub">Кластер пуст.</div>
+    {% endif %}
+    {% for m in cluster %}
+      <div class="cluster-member" data-idx="{{ loop.index0 }}" style="{% if not loop.first %}margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--card-border);{% endif %}">
+        <div style="display:flex; justify-content:space-between; align-items:baseline; gap: 10px; flex-wrap: wrap;">
+          <div style="font-weight:600; word-break:break-all;">
+            <span class="status-dot" style="display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; background: {{ 'var(--ok)' if m.reachable else 'var(--danger)' }};"></span>
+            {{ m.path }}
+            {% if m.path == next_build_path %}<span style="color: var(--accent); font-weight: 400; font-size: 0.8rem;">⭐ сюда ляжет следующая сборка</span>{% endif %}
+          </div>
+          <div class="stat-sub cluster-status-text">
+            {% if m.reachable %}{{ m.percent }}% занято — {{ (m.free / 1073741824) | round(1) }} ГБ свободно из {{ (m.total / 1073741824) | round(1) }} ГБ{% else %}⚠️ недоступен{% endif %}
+          </div>
+        </div>
+        <div class="bar"><div class="bar-fill cluster-bar" style="width: {{ m.percent }}%;"></div></div>
+        <canvas class="cluster-io-canvas" width="720" height="90" style="height: 90px; margin-top: 10px;"></canvas>
+        <div class="legend">
+          <span><span class="dot" style="background: var(--accent);"></span>Чтение</span>
+          <span><span class="dot" style="background: var(--ok);"></span>Запись</span>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
   <script>
     const cpuValue  = document.getElementById('cpu-value');
     const cpuBar    = document.getElementById('cpu-bar');
@@ -181,9 +208,81 @@
           }
         }
         prevNet = net;
+
+        updateCluster(data.cluster || []);
       } catch (e) {
         // тихо пропускаем один неудачный опрос — не спамим alert'ами
       }
+    }
+
+    // Кластер хранения — по карточке на член, с собственным read/write
+    // графиком. prevIo/history — по индексу карточки (data-idx), тот же
+    // паттерн накопительных счётчиков + клиентская разница, что уже
+    // используется для сети выше (без состояния на сервере — безопасно
+    // под несколькими gunicorn-воркерами).
+    const clusterNodes = Array.from(document.querySelectorAll('.cluster-member'));
+    const clusterState = clusterNodes.map(() => ({ prevIo: null, readHist: [], writeHist: [] }));
+
+    function drawIoGraph(canvas, readHist, writeHist) {
+      const ctx2 = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx2.clearRect(0, 0, w, h);
+      if (readHist.length < 2) return;
+      const maxVal = Math.max(1, ...readHist, ...writeHist);
+      const stepX = w / (MAX_POINTS - 1);
+      const startIdx = MAX_POINTS - readHist.length;
+      function drawLine(data, color) {
+        ctx2.beginPath();
+        ctx2.strokeStyle = color;
+        ctx2.lineWidth = 2;
+        data.forEach((v, i) => {
+          const x = (startIdx + i) * stepX;
+          const y = h - (v / maxVal) * (h - 10) - 4;
+          if (i === 0) ctx2.moveTo(x, y); else ctx2.lineTo(x, y);
+        });
+        ctx2.stroke();
+      }
+      drawLine(readHist, '#5b8def');
+      drawLine(writeHist, '#4caf6b');
+    }
+
+    function updateCluster(cluster) {
+      cluster.forEach((m, idx) => {
+        const node = clusterNodes[idx];
+        if (!node) return;
+        const st = clusterState[idx];
+
+        const dot = node.querySelector('.status-dot');
+        if (dot) dot.style.background = m.reachable ? 'var(--ok)' : 'var(--danger)';
+
+        const statusText = node.querySelector('.cluster-status-text');
+        if (statusText) {
+          statusText.textContent = m.reachable
+            ? m.percent + '% занято — ' + fmtBytes(m.free) + ' свободно из ' + fmtBytes(m.total)
+            : '⚠️ недоступен';
+        }
+        const bar = node.querySelector('.cluster-bar');
+        if (bar && m.reachable) {
+          bar.style.width = m.percent + '%';
+          bar.className = 'bar-fill cluster-bar ' + barClass(m.percent).replace('bar-fill', '').trim();
+        }
+
+        const canvas2 = node.querySelector('.cluster-io-canvas');
+        if (!canvas2) return;
+        if (!m.io) { st.prevIo = null; return; }
+        if (st.prevIo) {
+          const dt = m.io.ts - st.prevIo.ts;
+          if (dt > 0) {
+            const readRate  = Math.max(0, (m.io.read_bytes  - st.prevIo.read_bytes)  / dt);
+            const writeRate = Math.max(0, (m.io.write_bytes - st.prevIo.write_bytes) / dt);
+            st.readHist.push(readRate);
+            st.writeHist.push(writeRate);
+            if (st.readHist.length > MAX_POINTS) { st.readHist.shift(); st.writeHist.shift(); }
+            drawIoGraph(canvas2, st.readHist, st.writeHist);
+          }
+        }
+        st.prevIo = m.io;
+      });
     }
 
     diskSelect.addEventListener('change', poll);

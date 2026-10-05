@@ -12,9 +12,11 @@
 `psutil`-совместимость ради портируемости не оправдывает лишнюю
 зависимость.
 """
+import os
 import shutil
 import time
-from typing import List, Optional
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 # Псевдо-ФС, которые не имеет смысла показывать как "диск" — не блочные
 # устройства, размер либо 0, либо бессмысленен для мониторинга свободного
@@ -120,6 +122,94 @@ def memory_stats() -> dict:
         "available": available,
         "percent":   round(used / total * 100, 1) if total else 0.0,
     }
+
+
+def _mount_table() -> List[Tuple[str, str]]:
+    """[(mountpoint, device), ...] из /proc/mounts, в порядке файла —
+    используется для "какой блочное устройство обслуживает этот путь"
+    (тот же приём, что `df`/`findmnt`: самый длинный совпадающий по
+    префиксу mountpoint — путь кластера может быть подпапкой
+    смонтированной точки, не самой точкой монтирования)."""
+    out = []
+    try:
+        with open("/proc/mounts", "r") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                device, mountpoint = parts[0], parts[1].replace("\\040", " ")
+                out.append((mountpoint, device))
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def _device_for_path(path: str) -> Optional[str]:
+    """Имя блочного устройства (как в /proc/diskstats, напр. "sda1"),
+    реально обслуживающего `path` — для "нагрузки кластера хранения" на
+    дашборде (см. member_io() ниже). `None`, если точку монтирования не
+    нашли, или устройство не блочное (tmpfs/overlay/network-fs — нет
+    осмысленного diskstats-счётчика, см. _PSEUDO_FSTYPES)."""
+    try:
+        resolved = str(Path(path).resolve())
+    except OSError:
+        resolved = path
+    best_mp, best_dev = "", None
+    for mountpoint, device in _mount_table():
+        if (resolved == mountpoint or resolved.startswith(mountpoint.rstrip("/") + "/")) \
+                and len(mountpoint) > len(best_mp):
+            best_mp, best_dev = mountpoint, device
+    if not best_dev or not best_dev.startswith("/dev/"):
+        return None
+    try:
+        # realpath — LVM/mapper-устройства (/dev/mapper/vg-data) обычно
+        # симлинки на /dev/dm-N, а diskstats знает только dm-N, не имя
+        # mapper'а.
+        real = os.path.realpath(best_dev)
+    except OSError:
+        real = best_dev
+    return os.path.basename(real)
+
+
+def disk_io_counters() -> dict:
+    """Сырые накопительные sectors_read/sectors_written по каждому
+    блочному устройству из /proc/diskstats (сектор = 512 байт — это
+    фиксированная единица учёта ядра для этого файла, не зависит от
+    реального размера сектора устройства, см. Documentation/admin-guide/
+    iostats.rst). Тот же принцип, что и network_counters() — СЫРЫЕ
+    счётчики, скорость считает клиент разницей между опросами (без
+    состояния на сервере, безопасно под несколькими gunicorn-воркерами)."""
+    out = {}
+    try:
+        with open("/proc/diskstats", "r") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) < 10:
+                    continue
+                name = fields[2]
+                out[name] = {
+                    "read_bytes":  int(fields[5]) * 512,
+                    "write_bytes": int(fields[9]) * 512,
+                }
+    except FileNotFoundError:
+        pass
+    return out
+
+
+def member_io(path: str) -> Optional[dict]:
+    """read_bytes/write_bytes/ts для устройства, обслуживающего `path` —
+    для графика "нагрузка" у каждого члена кластера хранения на
+    дашборде. `None`, если устройство не резолвится (сетевая ФС,
+    tmpfs/overlay, путь не существует) — клиент в этом случае просто не
+    рисует график для этого члена, карточка статуса (места) не
+    затрагивается."""
+    device = _device_for_path(path)
+    if device is None:
+        return None
+    counters = disk_io_counters().get(device)
+    if counters is None:
+        return None
+    return {"device": device, "ts": time.time(), **counters}
 
 
 def network_counters() -> dict:
