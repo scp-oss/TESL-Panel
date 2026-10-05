@@ -33,6 +33,14 @@ TESL_PANEL_STORAGE_ROOT=./data TESL_PANEL_UPLOAD_TOKEN=devtoken \
 
 Откроется на `http://127.0.0.1:8080/`.
 
+Для разового/ручного запуска на уже склонированном чекауте (не вместо
+`deploy.sh`+systemd — см. его докстринг) — `./run.sh`: синкает на
+`origin/main` (`git fetch` + `git reset --hard`), ставит/обновляет venv,
+подхватывает `panel.env`, если он уже есть, запускает `gunicorn` тем же
+набором флагов, что и systemd-юнит (`PORT`/`WORKERS`/`THREADS` —
+переопределяются переменными окружения перед вызовом). Тот же паттерн,
+что `update_and_run.bat` у TESL/TESL-Manager.
+
 ## Деплой на сервер
 
 TLS — Cloudflare Origin Certificate, НЕ certbot (порты 80/443 на сервере
